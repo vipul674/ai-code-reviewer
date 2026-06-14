@@ -99,6 +99,16 @@ function scanSecretsInChanges(changes) {
       type: "Twilio Auth Token",
       regex: /(?:twilio_auth|twilio_token|auth_token)\s*[:=]\s*['"][a-f0-9]{32}['"]/gi,
       description: "Potential Twilio Auth Token detected. Exposing this token allows attackers to authenticate and use your Twilio account."
+    },
+    {
+      type: "JWT Token Check",
+      regex: /\beyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*\b/g,
+      description: "Potential hardcoded JSON Web Token (JWT) detected. Exposing JWT credentials allows authentication bypass or identity impersonation."
+    },
+    {
+      type: "Generic API Key / Token",
+      regex: /(?:api_key|apikey|secret_key|auth_token|client_secret)\b\s*[:=]\s*['"]([A-Za-z0-9-_]{16,})['"]/gi,
+      description: "Potential hardcoded Generic API Key or Token detected. This can lead to unauthorized service integration access."
     }
   ];
 

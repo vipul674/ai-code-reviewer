@@ -78,6 +78,7 @@ interface BackendResponse {
   repoName: string;
   filesReviewedCount: number;
   analysis: AnalysisData;
+  sessionId?: string;
 }
 
 interface AuditHistoryEntry {
@@ -627,7 +628,16 @@ export default function Dashboard() {
   const [chatHistory, setChatHistory] = useState<
     Array<{ role: "user" | "assistant"; content: string }>
   >([]);
+  const MAX_CHAT_HISTORY_LENGTH = 40;
+  const truncateChatHistory = (history: Array<{ role: "user" | "assistant"; content: string }>) => {
+    if (history.length > MAX_CHAT_HISTORY_LENGTH) {
+      return history.slice(history.length - MAX_CHAT_HISTORY_LENGTH);
+    }
+    return history;
+  };
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [useRag, setUseRag] = useState(false);
 
   const handleSendChatMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -647,8 +657,10 @@ export default function Dashboard() {
         },
         body: JSON.stringify({
           message: userMessage,
-          history: chatHistory,
+          history: truncateChatHistory(chatHistory),
           model: selectedModel,
+          sessionId,
+          useRag,
         }),
       });
 
@@ -657,19 +669,25 @@ export default function Dashboard() {
       }
 
       const data = await response.json();
-      setChatHistory((prev) => [
-        ...prev,
-        { role: "assistant", content: data.response },
-      ]);
+      setChatHistory((prev) =>
+        truncateChatHistory([
+          ...prev,
+          { role: "assistant", content: data.response },
+        ])
+      );
     } catch (err: any) {
       console.error(err);
-      setChatHistory((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: `❌ Error: ${err.message || "Could not communicate with the chat endpoint."}`,
-        },
-      ]);
+      const errMsg = err.message || "Chat service unavailable.";
+      addToast(errMsg, "error");
+      setChatHistory((prev) =>
+        truncateChatHistory([
+          ...prev,
+          {
+            role: "assistant",
+            content: `❌ Error: ${errMsg}`,
+          },
+        ])
+      );
     } finally {
       setIsChatLoading(false);
     }
@@ -857,7 +875,11 @@ export default function Dashboard() {
 
       const data: BackendResponse = await response.json();
       setAnalysisResult(data);
+      if (data.sessionId) {
+        setSessionId(data.sessionId);
+      }
       persistAuditHistory(data);
+      setChatHistory([]);
 
       // Select the first file reviewed automatically
       const filesList = Object.keys(data.analysis.fileReviews);
@@ -3971,6 +3993,34 @@ export default function Dashboard() {
                     </div>
 
                     {/* Chat Input form */}
+                    {!sessionId && (
+                      <div style={{
+                        background: "rgba(245, 158, 11, 0.1)",
+                        border: "1px solid rgba(245, 158, 11, 0.3)",
+                        borderRadius: "6px",
+                        padding: "8px 12px",
+                        marginBottom: "8px",
+                        fontSize: "11px",
+                        color: "#fbbf24",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                      }}>
+                        <AlertTriangle size={14} />
+                        <span>Please analyze a repository first to enable codebase-aware chat.</span>
+                      </div>
+                    )}
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "8px" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#9ca3af", cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={useRag}
+                          onChange={(e) => setUseRag(e.target.checked)}
+                          style={{ accentColor: "#a855f7" }}
+                        />
+                        Use RAG context retrieval
+                      </label>
+                    </div>
                     <form
                       onSubmit={handleSendChatMessage}
                       style={{

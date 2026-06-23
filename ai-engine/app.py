@@ -94,6 +94,33 @@ def sanitize_ai_output(text: str) -> str:
         strip_comments=True,
     )
 
+HOMOGLYPH_MAP = {
+    '\u0430': 'a', '\u0435': 'e', '\u043E': 'o', '\u0441': 'c', '\u0440': 'p',
+    '\u0445': 'x', '\u0443': 'y', '\u0432': 'b', '\u043D': 'h', '\u043A': 'k',
+    '\u043C': 'm', '\u0438': 'i', '\u0428': 'W', '\u03BF': 'o', '\u03B5': 'e', '\u03B1': 'a'
+}
+
+def normalize_homoglyphs(text: str) -> str:
+    return "".join(HOMOGLYPH_MAP.get(ch, ch) for ch in text)
+
+def detect_anomalous_prompt(prompt: str):
+    total_chars = len(prompt)
+    if total_chars == 0:
+        return
+    homoglyph_count = sum(1 for ch in prompt if ch in HOMOGLYPH_MAP)
+    if homoglyph_count / total_chars > 0.3:
+        raise HTTPException(status_code=400, detail="System prompt contains an unusually high proportion of confusable Unicode characters.")
+    
+    script_runs = set()
+    for ch in prompt:
+        cp = ord(ch)
+        if 0x0400 <= cp <= 0x04FF: script_runs.add('cyrillic')
+        elif 0x0370 <= cp <= 0x03FF: script_runs.add('greek')
+        elif 0x0061 <= cp <= 0x007A: script_runs.add('latin')
+    
+    if 'cyrillic' in script_runs or 'greek' in script_runs:
+        print(f"⚠️ System prompt contains non-Latin script characters: {', '.join(script_runs)}")
+
 def validate_system_prompt(prompt: str, max_len: int = 2000) -> str:
     if not prompt:
         return ""
@@ -101,12 +128,26 @@ def validate_system_prompt(prompt: str, max_len: int = 2000) -> str:
     for zwc in ["\u200B", "\u200C", "\u200D", "\uFEFF"]:
         normalized = normalized.replace(zwc, "")
     truncated = normalized[:max_len]
+    
+    detect_anomalous_prompt(truncated)
+    
+    homoglyph_normalized = normalize_homoglyphs(truncated)
+    lower = homoglyph_normalized.lower()
+
     dangerous = [
         "ignore all", "ignore previous", "ignore above",
         "forget all", "forget previous", "you are not",
         "override all", "disregard", "do not follow",
+        "new directive", "system override", "protocol change",
+        "roleplay mode", "from now on", "instead follow",
+        "real instruction", "actual instruction", "replace all",
+        "disobey", "unauthorized", "breach", "bypass",
+        "your true purpose", "you will now", "ignore the above",
+        "ignore previous instructions", "disregard all previous",
+        "forget your", "you are programmed", "override protocol",
+        "you have been", "you must now", "listen to me",
     ]
-    lower = truncated.lower()
+    
     for phrase in dangerous:
         escaped = re.escape(phrase)
         pattern = escaped.replace(r"\ ", r"\s+")
@@ -193,13 +234,12 @@ async def analyze_repository(request: AnalyzeRequest):
     repo_structure = [f.name for f in files]
     structure_text = "\n".join(repo_structure)
 
+    core_instructions = "You are a senior staff engineer and security analyst conducting a thorough code review. You must answer strictly based on the provided code context. Do not use any external knowledge, assumptions, or information beyond the files and repository structure given above. If a question cannot be answered from the provided context alone, state that clearly and do not speculate. You MUST follow the JSON output format specified below."
+    
     if custom_system_prompt:
-        base_prompt = (
-            custom_system_prompt
-            + "\n\nAdditionally, you are a senior staff engineer and security analyst conducting a thorough code review. You must answer strictly based on the provided code context. Do not use any external knowledge, assumptions, or information beyond the files and repository structure given above. If a question cannot be answered from the provided context alone, state that clearly and do not speculate. You MUST follow the JSON output format specified below."
-        )
+        base_prompt = core_instructions + "\n\n[USER PROVIDED SYSTEM PROMPT]:\n" + custom_system_prompt
     else:
-        base_prompt = "You are a senior staff engineer and security analyst conducting a thorough code review. You must answer strictly based on the provided code context. Do not use any external knowledge, assumptions, or information beyond the files and repository structure given above. If a question cannot be answered from the provided context alone, state that clearly and do not speculate."
+        base_prompt = core_instructions
 
     groq_model = get_groq_model(request.model)
     print(f"📡 Forwarding batched analysis request to Groq using model: {groq_model} (Batch size: {batch_size})")

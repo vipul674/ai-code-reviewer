@@ -121,16 +121,18 @@ Code additions with line numbers:
 ${changesText}
 \`\`\`
 
-You MUST reply ONLY in a valid JSON array format. Do not wrap in markdown quotes, do not explain.
+You MUST reply ONLY in a valid JSON object format containing a "reviews" array. Do not wrap in markdown quotes, do not explain.
 Format your JSON precisely as:
-[
-  {
-    "line": 12,
-    "type": "bug | security | optimization | style",
-    "comment": "### 🐞 Bug Title\\n\\nClear, constructive description of the issue.\\n\\n#### 💡 Actionable Suggestion\\n\\x60\\x60\\x60language\\n// corrected code\\n\\x60\\x60\\x60"
-  }
-]
-If no issues are found, reply with an empty array: []`;
+{
+  "reviews": [
+    {
+      "line": 12,
+      "type": "bug | security | optimization | style",
+      "comment": "### 🐞 Bug Title\\n\\nClear, constructive description of the issue.\\n\\n#### 💡 Actionable Suggestion\\n\\x60\\x60\\x60language\\n// corrected code\\n\\x60\\x60\\x60"
+    }
+  ]
+}
+If no issues are found, reply with: { "reviews": [] }`;
 
       try {
         const completion = await groq.chat.completions.create({
@@ -141,7 +143,19 @@ If no issues are found, reply with an empty array: []`;
         });
 
         const content = completion.choices[0].message.content;
-        const issues = cleanAndParseJSON(content);
+        let parsed = cleanAndParseJSON(content);
+        
+        let issues = [];
+        if (Array.isArray(parsed)) {
+          issues = parsed;
+        } else if (parsed && typeof parsed === 'object') {
+          for (const key of Object.keys(parsed)) {
+            if (Array.isArray(parsed[key])) {
+              issues = parsed[key];
+              break;
+            }
+          }
+        }
 
         if (Array.isArray(issues)) {
           console.log(`✅ AI review returned ${issues.length} comments for ${file.path}`);
@@ -163,7 +177,7 @@ If no issues are found, reply with an empty array: []`;
             }
           }
         } else {
-          console.warn(`⚠️ Warning: Expected array from AI response, got something else for ${file.path}`);
+          console.warn(`⚠️ Warning: Expected array from AI response, got something else for ${file.path}. Parsed keys: ${Object.keys(parsed || {}).join(', ')}`);
         }
 
       } catch (err) {

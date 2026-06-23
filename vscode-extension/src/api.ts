@@ -28,18 +28,19 @@ export interface BackendResponse {
   success: boolean;
   analysis: AnalysisData;
 }
+
 function getConfig() {
   const config = vscode.workspace.getConfiguration("reposage");
   const apiUrl = config.get<string>("apiUrl", "http://localhost:5000");
-  const apiKey = config.get<string>("apiKey", "");
-  return { apiUrl, apiKey };
+  return { apiUrl };
 }
 
 export async function reviewFileContent(
   fileName: string,
-  content: string
+  content: string,
+  apiKey: string
 ): Promise<ReviewResponse> {
-  const { apiUrl, apiKey } = getConfig();
+  const { apiUrl } = getConfig();
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -73,11 +74,12 @@ export async function reviewFileContent(
     const data = await response.json();
     console.log("RepoSage API response:", data);
     return { success: true, response: JSON.stringify(data, null, 2) };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
     console.error("RepoSage API fetch failed:", err);
     return {
       success: false,
-      error: `Failed to reach RepoSage backend at ${apiUrl}: ${err.message}`,
+      error: `Failed to reach RepoSage backend at ${apiUrl}: ${message}`,
     };
   }
 }

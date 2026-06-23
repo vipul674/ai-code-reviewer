@@ -55,13 +55,6 @@
           "type": "string",
           "default": "http://localhost:5000",
           "description": "RepoSage backend API base URL"
-        },
-        "reposage.apiKey": {
-          "type": "string",
-          "default": "",
-          "description": "API key for RepoSage backend authentication",
-          "editPresentation": "singleline",
-          "order": 1
         }
       }
     }

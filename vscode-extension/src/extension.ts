@@ -1,14 +1,15 @@
 import * as vscode from "vscode";
-import { reviewFileContent, BackendResponse } from "./api";
+import { reviewFileContent } from "./api";
 import { RepoSageDiagnostics } from "./diagnostics";
 import { RepoSageWebviewProvider } from "./webviewProvider";
 
-function getConfig() {
-  return vscode.workspace.getConfiguration("reposage");
-}
+const SECRET_KEY = "reposage.apiKey";
 
-function updateApiKeyStatusBar(statusBarItem: vscode.StatusBarItem) {
-  const apiKey = getConfig().get<string>("apiKey", "");
+async function updateApiKeyStatusBar(
+  statusBarItem: vscode.StatusBarItem,
+  secrets: vscode.SecretStorage
+) {
+  const apiKey = await secrets.get(SECRET_KEY);
   if (apiKey) {
     statusBarItem.text = "$(key) RepoSage: Connected";
     statusBarItem.tooltip = "RepoSage API key is configured";
@@ -22,8 +23,20 @@ function updateApiKeyStatusBar(statusBarItem: vscode.StatusBarItem) {
   }
 }
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
   console.log("RepoSage extension is now active!");
+
+  // Migrate any legacy plain-text API key from settings.json to SecretStorage.
+  const legacyConfig = vscode.workspace.getConfiguration("reposage");
+  const legacyKey = legacyConfig.get<string>("apiKey", "");
+  if (legacyKey) {
+    await context.secrets.store(SECRET_KEY, legacyKey);
+    await legacyConfig.update(
+      "apiKey",
+      undefined,
+      vscode.ConfigurationTarget.Global
+    );
+  }
 
   const diagnostics = new RepoSageDiagnostics();
   context.subscriptions.push(diagnostics);
@@ -41,13 +54,13 @@ export function activate(context: vscode.ExtensionContext) {
     100
   );
   statusBarItem.command = "reposage.configureApiKey";
-  updateApiKeyStatusBar(statusBarItem);
+  await updateApiKeyStatusBar(statusBarItem, context.secrets);
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("reposage.configureApiKey", async () => {
-      const currentKey = getConfig().get<string>("apiKey", "");
+      const currentKey = (await context.secrets.get(SECRET_KEY)) ?? "";
       const key = await vscode.window.showInputBox({
         prompt: "Enter your RepoSage API key",
         password: true,
@@ -63,15 +76,18 @@ export function activate(context: vscode.ExtensionContext) {
       });
 
       if (key !== undefined) {
-        const config = getConfig();
         if (key === "") {
-          await config.update("apiKey", undefined, vscode.ConfigurationTarget.Global);
-          vscode.window.showInformationMessage("RepoSage API key has been cleared.");
+          await context.secrets.delete(SECRET_KEY);
+          vscode.window.showInformationMessage(
+            "RepoSage API key has been cleared."
+          );
         } else {
-          await config.update("apiKey", key, vscode.ConfigurationTarget.Global);
-          vscode.window.showInformationMessage("RepoSage API key has been configured successfully!");
+          await context.secrets.store(SECRET_KEY, key);
+          vscode.window.showInformationMessage(
+            "RepoSage API key has been configured successfully!"
+          );
         }
-        updateApiKeyStatusBar(statusBarItem);
+        await updateApiKeyStatusBar(statusBarItem, context.secrets);
       }
     })
   );
@@ -91,13 +107,14 @@ export function activate(context: vscode.ExtensionContext) {
         const document = editor.document;
         const fileName = document.fileName;
         const fileContent = document.getText();
+        const apiKey = (await context.secrets.get(SECRET_KEY)) ?? "";
 
         provider.setLoading(true);
         vscode.window.showInformationMessage(
           `RepoSage: Reviewing ${fileName}...`
         );
 
-        const result = await reviewFileContent(fileName, fileContent);
+        const result = await reviewFileContent(fileName, fileContent, apiKey);
 
         if (result.success) {
           console.log("RepoSage review result:", result.response);
@@ -116,10 +133,11 @@ export function activate(context: vscode.ExtensionContext) {
     )
   );
 
+  // Update the status bar whenever the stored secret changes.
   context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("reposage.apiKey")) {
-        updateApiKeyStatusBar(statusBarItem);
+    context.secrets.onDidChange(async (e: vscode.SecretStorageChangeEvent) => {
+      if (e.key === SECRET_KEY) {
+        await updateApiKeyStatusBar(statusBarItem, context.secrets);
       }
     })
   );

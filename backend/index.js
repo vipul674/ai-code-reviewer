@@ -9,6 +9,8 @@ import { fileURLToPath } from 'url';
 import { Octokit } from '@octokit/rest';
 import { requireApiKey } from './utils/authMiddleware.js';
 import rateLimit from 'express-rate-limit';
+import RedisStore from 'rate-limit-redis';
+import Redis from 'ioredis';
 import { scanSecrets, scanSecretsInChanges } from './utils/secretsScanner.js';
 import { loadIgnorePatterns, readFilesRecursively } from './utils/ignoreHelper.js';
 import { isValidRepoUrl, parseRepoUrl } from './utils/urlValidator.js';
@@ -62,6 +64,13 @@ app.use(cors({
   credentials: true
 }));
 
+// Optional Redis configuration for distributed rate limiting
+let redisClient;
+if (process.env.REDIS_URL) {
+  redisClient = new Redis(process.env.REDIS_URL);
+  redisClient.on('error', (err) => console.error('Redis Client Error', err));
+}
+
 // Per-IP rate limiting for expensive endpoints
 const analyzeLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
@@ -69,6 +78,7 @@ const analyzeLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: getRealClientIp,
+  store: redisClient ? new RedisStore({ sendCommand: (...args) => redisClient.call(...args) }) : undefined,
   message: { error: 'Too many analyze requests. Please slow down and retry after 5 minutes.' }
 });
 const chatLimiter = rateLimit({
@@ -77,6 +87,7 @@ const chatLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: getRealClientIp,
+  store: redisClient ? new RedisStore({ sendCommand: (...args) => redisClient.call(...args) }) : undefined,
   message: { error: 'Too many chat requests. Please slow down and retry after 1 minute.' }
 });
 

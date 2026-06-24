@@ -1,3 +1,5 @@
+import crypto from 'crypto';
+
 export const requireApiKey = (req, res, next) => {
   // Get the API key from the request headers
   const providedKey = req.headers['x-api-key'];
@@ -10,7 +12,7 @@ export const requireApiKey = (req, res, next) => {
   }
 
   // Validate the provided key
-  if (!providedKey || providedKey !== validKey) {
+  if (!providedKey || providedKey.length !== validKey.length || !crypto.timingSafeEqual(Buffer.from(providedKey), Buffer.from(validKey))) {
     console.warn(`Unauthorized request attempt to ${req.originalUrl}`);
     return res.status(401).json({ error: 'Unauthorized: Invalid or missing API Key.' });
   }

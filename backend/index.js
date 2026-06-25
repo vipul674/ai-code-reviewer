@@ -24,7 +24,7 @@ import { verifyPort } from './utils/envVerifier.js';
 import { mockAIReview } from './utils/mockAIReview.js';
 import Analytics from './models/Analytics.js';
 import Session from './models/Session.js';
-import { connectDatabase } from './config/db.js';
+import { connectDatabase, ensureConnection } from './config/db.js';
 
 dotenv.config();
 
@@ -378,6 +378,7 @@ app.post('/api/analyze', requireApiKey, analyzeLimiter, async (req, res) => {
       const healthScore = Math.max(0, Math.round(100 - totalBugs * 5 - totalSecurityIssues * 3 - totalOptimizations * 1 - totalStylingIssues * 0.5));
 
       try {
+        await ensureConnection();
         await Analytics.create({
           repoUrl,
           repoName,
@@ -1065,6 +1066,7 @@ app.post('/api/reports/pdf', requireApiKey, (req, res) => {
 // 🟢 Route: Analytics Trends — 30-day time-series of repository health scores
 app.get('/api/analytics/trends', requireApiKey, async (req, res) => {
   try {
+    await ensureConnection();
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 

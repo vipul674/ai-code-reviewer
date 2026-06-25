@@ -10,6 +10,9 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 
 export async function connectDatabase() {
   if (isConnected) return;
+  if (connectionPromise && !isConnected) {
+    connectionPromise = null;
+  }
   if (connectionPromise) return connectionPromise;
 
   connectionPromise = mongoose.connect(MONGODB_URI, {
@@ -73,7 +76,8 @@ export async function closeDatabase() {
 
 mongoose.connection.on('disconnected', () => {
   isConnected = false;
-  console.warn('⚠️ MongoDB disconnected. Analytics will not be persisted.');
+  connectionPromise = null;
+  console.warn('⚠️ MongoDB disconnected. Will re-attempt connection on next request.');
 });
 
 mongoose.connection.on('error', (err) => {

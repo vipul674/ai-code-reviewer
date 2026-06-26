@@ -51,39 +51,43 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 let sessionRequest: Promise<void> | null = null;
 
 const ensureApiSession = async () => {
-  if (!sessionRequest) {
-    sessionRequest = fetch(`${API_BASE_URL}/api/session`, {
-      method: "POST",
-      credentials: "include",
-    }).then(async (response) => {
-      if (response.status === 401) {
-        const apiKey = window.prompt("Enter the RepoSage backend API key:");
-        if (!apiKey) {
-          throw new Error("Backend API key is required to continue.");
-        }
-
-        const loginResponse = await fetch(`${API_BASE_URL}/api/session`, {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "x-api-key": apiKey,
-          },
-        });
-
-        if (!loginResponse.ok) {
-          throw new Error("Invalid backend API key.");
-        }
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error("Could not initialize a secure API session.");
-      }
-    }).catch((error) => {
+  if (sessionRequest) {
+    try {
+      await sessionRequest;
+      return;
+    } catch {
       sessionRequest = null;
-      throw error;
-    });
+    }
   }
+
+  sessionRequest = fetch(`${API_BASE_URL}/api/session`, {
+    method: "POST",
+    credentials: "include",
+  }).then(async (response) => {
+    if (response.status === 401) {
+      const apiKey = window.prompt("Enter the RepoSage backend API key:");
+      if (!apiKey) {
+        throw new Error("Backend API key is required to continue.");
+      }
+
+      const loginResponse = await fetch(`${API_BASE_URL}/api/session`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "x-api-key": apiKey,
+        },
+      });
+
+      if (!loginResponse.ok) {
+        throw new Error("Invalid backend API key.");
+      }
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error("Could not initialize a secure API session.");
+    }
+  });
 
   return sessionRequest;
 };

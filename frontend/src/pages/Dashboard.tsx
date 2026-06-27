@@ -34,7 +34,7 @@ import { sanitizeMermaidOutput } from "../utils/sanitize";
 try {
   mermaid.initialize({
     startOnLoad: false,
-    theme: "dark",
+    theme: window.matchMedia("(prefers-color-scheme: light)").matches ? "base" : "dark",
     securityLevel: "strict",
     themeVariables: {
       background: "#0f172a",

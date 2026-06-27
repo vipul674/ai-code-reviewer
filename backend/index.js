@@ -133,6 +133,13 @@ function csrfProtection(req, res, next) {
     const headerBuf = Buffer.from(String(headerToken));
     const cookieBuf = Buffer.from(String(cookieToken));
     if (headerBuf.length !== cookieBuf.length || !crypto.timingSafeEqual(headerBuf, cookieBuf)) {
+      // Allow session creation, CSRF token, and webhook endpoints even on token mismatch
+      if (req.path === '/api/session' || req.path === '/api/csrf-token') {
+        return next();
+      }
+      if (req.path === '/api/webhook') {
+        return next();
+      }
       return res.status(403).json({ error: 'CSRF validation failed.' });
     }
   }

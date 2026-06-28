@@ -27,7 +27,7 @@ import { mockAIReview } from './utils/mockAIReview.js';
 import AnalysisCache from './utils/analysisCache.js';
 import Analytics from './models/Analytics.js';
 import Session, { estimateSessionSize } from './models/Session.js';
-import { connectDatabase, ensureConnection } from './config/db.js';
+import { connectDatabase, ensureConnection, closeDatabase } from './config/db.js';
 
 dotenv.config();
 
@@ -182,7 +182,7 @@ function cleanupTempRepos() {
     fs.rmSync(tempReposDir, { recursive: true, force: true });
   }
 }
-function onShutdown() { cleanupTempRepos(); cleanupTimers(); process.exit(0); }
+function onShutdown() { cleanupTempRepos(); cleanupTimers(); closeDatabase(); process.exit(0); }
 process.on('SIGINT', onShutdown);
 process.on('SIGTERM', onShutdown);
 

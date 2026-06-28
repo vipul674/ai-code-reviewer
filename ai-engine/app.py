@@ -124,6 +124,9 @@ def sanitize_ai_output(text: str) -> str:
         strip_comments=True,
     )
 
+# NOTE: This HOMOGLYPH_MAP, dangerous phrases list, and validation logic is
+# duplicated in backend/index.js. When modifying these definitions, update
+# both files to keep them in sync and prevent security bypasses.
 HOMOGLYPH_MAP = {
     '\u0430': 'a', '\u0435': 'e', '\u043E': 'o', '\u0441': 'c', '\u0440': 'p',
     '\u0445': 'x', '\u0443': 'y', '\u0432': 'b', '\u043D': 'h', '\u043A': 'k',

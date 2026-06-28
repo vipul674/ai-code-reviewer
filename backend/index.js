@@ -22,6 +22,7 @@ import { analyzeComplexity } from './utils/complexityAnalyzer.js';
 import { deleteFolderRecursive, getFolderSize } from './utils/fileHelper.js';
 import { verifyWebhookSignature } from './utils/signatureVerifier.js';
 import ReviewQueue from './utils/reviewQueue.js';
+import { scanFileContentForWarnings } from './utils/sanitizeFileContent.js';
 import { verifyPort } from './utils/envVerifier.js';
 import { mockAIReview } from './utils/mockAIReview.js';
 import AnalysisCache from './utils/analysisCache.js';
@@ -405,6 +406,18 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
 
       console.log(`📁 Found ${files.length} valid source files. Checking cache...`);
 
+      // 1.3. Scan files for prompt injection patterns
+      const fileWarnings = [];
+      for (const file of files) {
+        const fileScanWarnings = scanFileContentForWarnings(file.content);
+        for (const warning of fileScanWarnings) {
+          fileWarnings.push({ file: file.name, warning });
+        }
+      }
+      if (fileWarnings.length > 0) {
+        console.warn(`⚠️ Found ${fileWarnings.length} potential prompt injection patterns across ${files.length} files`);
+      }
+
       // 1.5. Check analysis cache to avoid redundant LLM calls for identical analyses
       const cacheKey = analysisCache.generateKey(repoUrl, files, { model, language, company });
       let reviewResult = analysisCache.get(cacheKey);
@@ -554,7 +567,8 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
         analysis: reviewResult,
         sessionId,
         chatAvailable: sessionPersisted,
-        sessionPersisted
+        sessionPersisted,
+        ...(fileWarnings.length > 0 ? { warnings: fileWarnings } : {})
       });
 
     } catch (err) {

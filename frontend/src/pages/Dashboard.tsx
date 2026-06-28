@@ -92,6 +92,7 @@ export interface BackendResponse {
   sessionId?: string;
   sessionPersisted?: boolean;
   _mock?: boolean;
+  warnings?: Array<{ file: string; warning: string }>;
 }
 
 interface AuditHistoryEntry {
@@ -1788,6 +1789,35 @@ export default function Dashboard() {
                     AI Engine offline — showing simulated review results.
                     Start the backend AI service for real analysis.
                   </span>
+                </div>
+              )}
+              {analysisResult.warnings && analysisResult.warnings.length > 0 && (
+                <div
+                  style={{
+                    background: "rgba(239,68,68,0.1)",
+                    border: "1px solid rgba(239,68,68,0.35)",
+                    borderRadius: "8px",
+                    padding: "12px 16px",
+                    color: "#fca5a5",
+                    fontSize: "13px",
+                    fontWeight: 600,
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "8px",
+                    flexDirection: "column",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <ShieldAlert size={16} style={{ color: "#ef4444" }} />
+                    <span>Potential prompt injection detected in repository files</span>
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: "24px", fontSize: "11px", fontWeight: 400 }}>
+                    {analysisResult.warnings.map((w, i) => (
+                      <li key={i}>
+                        <strong>{w.file}</strong>: {w.warning}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
               {/* Dashboard View Selection Tabs & Export Controls */}

@@ -37,6 +37,29 @@ MAX_CHAT_FILES = int(os.getenv("MAX_CHAT_FILES", "20"))
 # Maximum seconds to wait for a single LLM API response before returning 504 (#786)
 LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 
+def sanitize_file_content(content: str) -> str:
+    dangerous_patterns = [
+        "ignore all previous instructions",
+        "ignore all instructions",
+        "forget all previous",
+        "you are now",
+        "from now on",
+        "override all",
+        "system override",
+        "new directive",
+        "protocol change",
+        "disregard all",
+        "you will now",
+        "you must now",
+    ]
+    for pattern in dangerous_patterns:
+        content = content.replace(pattern, f"[neutralized: {pattern}]")
+    lines = content.split("\n")
+    truncated_lines = [line[:500] for line in lines]
+    wrapped = "\n".join(truncated_lines)
+    wrapped = "--- BEGIN FILE CONTENT (read-only code context) ---\n" + wrapped + "\n--- END FILE CONTENT ---"
+    return wrapped
+
 def _redact_key(text: str, key: str) -> str:
     if not text or not key:
         return text
@@ -393,6 +416,7 @@ async def analyze_repository(request: AnalyzeRequest):
                 print(f"INFO: Truncated file {f.name} from {len(f.content)} to {MAX_FILE_CHARS_PER_FILE} chars")
             file_contents_summary.append(f"--- File: {f.name} ---\n{content}")
         contents_text = "\n\n".join(file_contents_summary)
+        contents_text = sanitize_file_content(contents_text)
         
         is_first_batch = (idx == 0)
         
@@ -560,6 +584,7 @@ async def chat_with_repository(request: ChatRequest):
         file_contents_summary.append(f"--- File: {f.name} ---\n{content}")
     structure_text = "\n".join(repo_structure)
     contents_text = "\n\n".join(file_contents_summary)
+    contents_text = sanitize_file_content(contents_text)
 
     # 2. Optionally retrieve RAG chunks if toggle is on
     rag_context = ""
@@ -694,6 +719,7 @@ async def review_diff(request: ReviewDiffRequest):
             continue
         
         changes_text = "\n".join([f"Line {c.line}: {c.content}" for c in file.changes])
+        changes_text = sanitize_file_content(changes_text)
         
         # FIXED: Prompt now explicitly requests a JSON object {"reviews": [...]}
         review_prompt = f"""You are a Senior Staff Engineer performing an automated Pull Request code review.

@@ -364,6 +364,10 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
       return res.status(413).json({ error: `Repository exceeds the maximum allowed size of ${maxRepoSizeMB}MB (Reported size: ~${Math.round(repoSizeBytes/1024/1024)}MB).` });
     }
   } catch (err) {
+    if (process.env.GITHUB_PAT && err.status !== 403 && err.status !== 429) {
+      console.error(`❌ GitHub API error verifying size for ${owner}/${repoName}: ${err.message}`);
+      return res.status(502).json({ error: `Failed to verify repository size: ${err.message}. Check GITHUB_PAT configuration.` });
+    }
     console.warn(`Could not verify repository size via GitHub API for ${owner}/${repoName}. Proceeding to clone with filters...`);
   }
 

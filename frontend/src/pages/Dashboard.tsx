@@ -611,7 +611,7 @@ export default function Dashboard() {
     const userMessage = chatInput;
     setChatInput("");
     setChatHistory((prev) => {
-      const updated = [...prev, { role: "user" as const, content: userMessage }];
+      const updated = truncateChatHistory([...prev, { role: "user" as const, content: userMessage }]);
       try { localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(updated)); } catch {}
       return updated;
     });

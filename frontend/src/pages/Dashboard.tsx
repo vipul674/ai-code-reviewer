@@ -21,7 +21,6 @@ import {
   Code2,
   MessageSquare,
   Send,
-  Settings,
   Clock,
   Trash2,
   Search,
@@ -528,23 +527,6 @@ export default function Dashboard() {
       `\`\`\`\n${item.suggestion}\n\`\`\`\n\n` +
       `---\n` +
       `*Generated automatically by **RepoSage AI Copilot**.*`;
-
-    <button
-      onClick={() => setShowSettings(true)}
-      style={{
-        background: "rgba(255,255,255,0.05)",
-        border: "1px solid var(--border-color)",
-        borderRadius: "6px",
-        padding: "6px 10px",
-        cursor: "pointer",
-        color: "var(--text-color)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
-      <Settings size={15} />
-    </button>;
 
     const gssoLabel = localStorage.getItem("reposage_gssoc_label") || "gssoc26";
     const labels = isGssocLabelingEnabled

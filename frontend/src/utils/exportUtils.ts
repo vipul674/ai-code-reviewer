@@ -129,8 +129,10 @@ export const handleHtmlExport = async (
     });
 
     if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || 'Failed to export HTML report.');
+      let errMsg = 'Failed to export HTML report.';
+      try { const errData = await response.json(); errMsg = errData.error || errMsg; }
+      catch { try { errMsg = (await response.text()) || errMsg; } catch {} }
+      throw new Error(errMsg);
     }
 
     const blob = await response.blob();

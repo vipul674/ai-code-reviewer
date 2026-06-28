@@ -40,7 +40,14 @@ LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 def _redact_key(text: str, key: str) -> str:
     if not text or not key:
         return text
-    return text.replace(key, "***").replace(key[:8] if len(key) > 8 else key, "***")
+    escaped = re.escape(key)
+    text = re.sub(escaped, "***", text)
+    for trunc_suffix in ["...", "…", " (truncated)"]:
+        truncated = re.escape(key[:len(key) // 2] + trunc_suffix)
+        text = re.sub(truncated, "***", text)
+    if len(key) > 16:
+        text = re.sub(re.escape(key[:16]), "***", text)
+    return text
 
 ALLOWED_TAGS = [
     'svg', 'g', 'path', 'circle', 'rect', 'line', 'polyline', 'polygon',

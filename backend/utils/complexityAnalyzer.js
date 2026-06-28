@@ -94,7 +94,7 @@ export function analyzeComplexity(fileContent, filePath) {
 
     // --- Function Detection ---
     if (['.js', '.jsx', '.ts', '.tsx'].includes(ext)) {
-      if (trimmed.includes('function ') || trimmed.includes('=>') || /^\s*(?:async\s+)?\w+\s*\([^)]*\)\s*\{/g.test(trimmed)) {
+      if (trimmed.includes('function ') || /[=(]\s*=>/.test(trimmed) || /^\s*(?:async\s+)?\w+\s*\([^)]*\)\s*\{/g.test(trimmed)) {
         functionCount++;
       }
     } else if (ext === '.py') {

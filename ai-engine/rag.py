@@ -82,6 +82,8 @@ def query_chunks(
     n_results: int = 5,
     repo_url: Optional[str] = None,
 ) -> list[dict]:
+    if not query_text or not query_text.strip():
+        return []
     collection = _get_collection(repo_url)
     query_embedding = embed_texts([query_text])
     results = collection.query(

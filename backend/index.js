@@ -29,6 +29,7 @@ import AnalysisCache from './utils/analysisCache.js';
 import Analytics from './models/Analytics.js';
 import Session, { estimateSessionSize } from './models/Session.js';
 import { connectDatabase, ensureConnection, closeDatabase } from './config/db.js';
+import { generateJSONReport, generateHTMLReport, getReportPath } from './utils/reportGenerator.js';
 
 dotenv.config();
 
@@ -386,7 +387,7 @@ function requireJsonContentType(req, res, next) {
 // 🟢 Route: GitHub Import & AI Review
 app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, async (req, res) => {
   let { repoUrl, company = 'General', language = 'English', model = 'llama-3.3-70b-versatile',temperature = 0.7,
-     maxTokens = 2048, systemPrompt = '', batchSize = 5
+     maxTokens = 2048, systemPrompt = '', batchSize = 5, generateReport = false, reportFormat = 'json'
    } = req.body;
 
   // Enforce boundary limits for batchSize to prevent downstream parsing crashes
@@ -622,7 +623,28 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
 
       // 5. Clean up folder
       await deleteFolderRecursive(clonePath);
-      
+
+      // 5.5. Generate report if requested
+      let reportResult = null;
+      if (generateReport) {
+        try {
+          const reportFormatNormalized = (reportFormat || 'json').toLowerCase();
+          const reportOutputPath = getReportPath(reportFormatNormalized);
+
+          if (reportFormatNormalized === 'html') {
+            reportResult = generateHTMLReport(repoName, files, reviewResult, reportOutputPath);
+          } else {
+            reportResult = generateJSONReport(repoName, files, reviewResult, reportOutputPath);
+          }
+
+          if (reportResult.success) {
+            console.log(`✅ Report generated: ${reportOutputPath}`);
+          }
+        } catch (reportErr) {
+          console.warn(`⚠️ Failed to generate report: ${reportErr.message}`);
+        }
+      }
+
       // 6. Return result
       return res.json({
         success: true,
@@ -632,6 +654,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
         sessionId,
         chatAvailable: sessionPersisted,
         sessionPersisted,
+        ...(reportResult ? { report: reportResult } : {}),
         ...(fileWarnings.length > 0 ? { warnings: fileWarnings } : {})
       });
 

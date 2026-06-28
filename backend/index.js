@@ -932,11 +932,11 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
     
     try {
       const baseUrl = aiEngineUrl.replace(/\/+$/, '');
-      const aiResponse = await fetch(`${baseUrl}/review-diff`, {
+      const aiResponse = await fetchWithTimeout(`${baseUrl}/review-diff`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ files: filesToReview })
-      });
+      }, 60000);
 
       if (aiResponse.ok) {
         const result = await aiResponse.json();

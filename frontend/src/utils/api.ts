@@ -78,6 +78,11 @@ export const apiFetch = async (path: string, options: RequestInit = {}, timeoutM
       headers,
       signal: controller.signal,
     });
+    // Refresh CSRF token from cookies after each response (handles rotation)
+    const match = document.cookie.match(/(?:^|;\s*)csrf-token=([^;]*)/);
+    if (match) {
+      csrfToken = match[1];
+    }
     return response;
   } catch (error: any) {
     if (error.name === 'AbortError') {

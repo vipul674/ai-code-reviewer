@@ -118,8 +118,30 @@ app.use(express.json({
 // CSRF token endpoint: generates a random token and sets it as a non-httpOnly cookie
 // so the frontend can read it and include it in the X-CSRF-Token header.
 const CSRF_COOKIE_NAME = 'csrf-token';
+const CSRF_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const csrfTokenStore = new Map();
+
 function generateCsrfToken() {
-  return crypto.randomBytes(32).toString('hex');
+  const token = crypto.randomBytes(32).toString('hex');
+  csrfTokenStore.set(token, Date.now() + CSRF_TOKEN_TTL_MS);
+  if (csrfTokenStore.size > 10000) {
+    const now = Date.now();
+    for (const [t, expiry] of csrfTokenStore) {
+      if (now > expiry) csrfTokenStore.delete(t);
+    }
+  }
+  return token;
+}
+
+function validateCsrfToken(token) {
+  if (!token) return false;
+  const expiry = csrfTokenStore.get(token);
+  if (!expiry) return false;
+  if (Date.now() > expiry) {
+    csrfTokenStore.delete(token);
+    return false;
+  }
+  return true;
 }
 
 // CSRF validation middleware for state-changing methods
@@ -151,6 +173,20 @@ function csrfProtection(req, res, next) {
       }
       return res.status(403).json({ error: 'CSRF validation failed.' });
     }
+    // Validate token expiry from store
+    if (!validateCsrfToken(headerToken)) {
+      return res.status(403).json({ error: 'CSRF token expired. Refresh and try again.' });
+    }
+    // Remove old token and rotate
+    csrfTokenStore.delete(headerToken);
+    const newToken = generateCsrfToken();
+    const csrfCookie = `${CSRF_COOKIE_NAME}=${newToken}; HttpOnly=false; SameSite=Strict; Path=/`;
+    const secureFlag = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+    const existingCookies = res.getHeader('Set-Cookie') || [];
+    const cookies = Array.isArray(existingCookies) ? existingCookies : [existingCookies];
+    res.setHeader('Set-Cookie', [...cookies, csrfCookie + secureFlag]);
+    // Expose new token in response for the frontend
+    res.locals.rotatedCsrfToken = newToken;
   }
   next();
 }
@@ -163,8 +199,21 @@ app.post('/api/session', requireApiKey, (req, res) => {
   if (!sessionCookie) return;
 
   const csrfToken = generateCsrfToken();
-  res.setHeader('Set-Cookie', [sessionCookie, `${CSRF_COOKIE_NAME}=${csrfToken}; HttpOnly=false; SameSite=Strict; Path=/`]);
+  const csrfCookie = `${CSRF_COOKIE_NAME}=${csrfToken}; HttpOnly=false; SameSite=Strict; Path=/`;
+  const secureFlag = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', [sessionCookie, csrfCookie + secureFlag]);
   return res.json({ success: true, csrfToken });
+});
+
+// Logout endpoint — clears session and CSRF token
+app.post('/api/logout', requireApiKey, (req, res) => {
+  const cookieToken = req.cookies?.[CSRF_COOKIE_NAME];
+  if (cookieToken) {
+    csrfTokenStore.delete(cookieToken);
+  }
+  res.clearCookie(CSRF_COOKIE_NAME, { path: '/' });
+  res.clearCookie('session', { path: '/' });
+  return res.json({ success: true, message: 'Logged out successfully.' });
 });
 
 // CSRF token retrieval for clients that need a fresh token

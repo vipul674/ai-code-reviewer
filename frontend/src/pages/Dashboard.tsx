@@ -101,6 +101,25 @@ interface AnalysisData {
 }
 
 export interface BackendResponse {
+  dependencyReport?: {
+  dependencies: {
+    name: string;
+    currentVersion: string;
+    latestVersion: string;
+    risk: string;
+    deprecated: boolean;
+    vulnerable: boolean;
+    recommendation: string;
+  }[];
+};
+  prSummary?: {
+  overallPurpose: string;
+  filesChanged: number;
+  majorLogicUpdates: string[];
+  potentialRisks: string[];
+  breakingChanges: string[];
+  testingRecommendations: string[];
+};
   success: boolean;
   repoName: string;
   filesReviewedCount: number;
@@ -110,6 +129,8 @@ export interface BackendResponse {
   _mock?: boolean;
   warnings?: Array<{ file: string; warning: string }>;
 }
+
+
 
 interface AuditHistoryEntry {
   id: string;

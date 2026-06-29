@@ -1686,4 +1686,4 @@ app.get("/api/review-history/compare/:id1/:id2", requireApiKey, async (req, res)
 app.listen(PORT, () => {
   console.log(`🟢 RepoSage Backend running on http://localhost:${PORT}`);
 });
-\n// TODO: Issue #397 - Bug [Backend]: Temp folder leakage if Node process crashes during analysis\n
+// TODO: Issue #397 - Bug [Backend]: Temp folder leakage if Node process crashes during analysis

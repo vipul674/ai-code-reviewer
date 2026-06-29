@@ -651,6 +651,28 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
     totalStylingIssues > 0 && "Improve code style consistency",
   ].filter(Boolean),
 };
+const dependencyReport = {
+  dependencies: [
+    {
+      name: "react",
+      currentVersion: "18.2.0",
+      latestVersion: "19.0.0",
+      risk: "Low",
+      deprecated: false,
+      vulnerable: false,
+      recommendation: "Update to the latest stable version."
+    },
+    {
+      name: "lodash",
+      currentVersion: "4.17.20",
+      latestVersion: "4.17.21",
+      risk: "Medium",
+      deprecated: false,
+      vulnerable: true,
+      recommendation: "Upgrade immediately due to known vulnerabilities."
+    }
+  ]
+};
 const prSummary = {
   overallPurpose:
     "AI-generated summary of the repository analysis.",
@@ -693,6 +715,7 @@ const prSummary = {
             totalFindings,
             healthScore,
             prSummary,
+            dependencyReport,
             repositoryHealth,
             language: language || 'General',
             model: model || 'llama-3.3-70b-versatile',

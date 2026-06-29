@@ -101,6 +101,17 @@ interface AnalysisData {
 }
 
 export interface BackendResponse {
+  dependencyReport?: {
+  dependencies: {
+    name: string;
+    currentVersion: string;
+    latestVersion: string;
+    risk: string;
+    deprecated: boolean;
+    vulnerable: boolean;
+    recommendation: string;
+  }[];
+};
   prSummary?: {
   overallPurpose: string;
   filesChanged: number;
@@ -1993,6 +2004,60 @@ export default function Dashboard() {
       <li key={i}>{item}</li>
     ))}
   </ul>
+</div>
+<div
+  className="glass-panel"
+  style={{ padding: "20px", marginBottom: "16px" }}
+>
+  <h2>📦 Dependency Risk Analyzer</h2>
+
+  {(analysisResult.dependencyReport?.dependencies || []).length === 0 ? (
+    <p style={{ color: "#9ca3af" }}>
+      No dependency information available.
+    </p>
+  ) : (
+    <table
+      style={{
+        width: "100%",
+        borderCollapse: "collapse",
+        marginTop: "15px",
+      }}
+    >
+      <thead>
+        <tr>
+          <th>Package</th>
+          <th>Current</th>
+          <th>Latest</th>
+          <th>Risk</th>
+          <th>Status</th>
+          <th>Recommendation</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {analysisResult.dependencyReport.dependencies.map(
+          (dep, index) => (
+            <tr key={index}>
+              <td>{dep.name}</td>
+              <td>{dep.currentVersion}</td>
+              <td>{dep.latestVersion}</td>
+              <td>{dep.risk}</td>
+
+              <td>
+                {dep.vulnerable
+                  ? "⚠️ Vulnerable"
+                  : dep.deprecated
+                  ? "Deprecated"
+                  : "Safe"}
+              </td>
+
+              <td>{dep.recommendation}</td>
+            </tr>
+          )
+        )}
+      </tbody>
+    </table>
+  )}
 </div>
               {/* Dashboard View Selection Tabs & Export Controls */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px", flexWrap: "wrap", width: "100%" }}>

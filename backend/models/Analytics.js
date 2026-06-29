@@ -72,6 +72,10 @@ const analyticsSchema = new mongoose.Schema({
     default: [],
   },
 },
+dependencyReport: {
+  type: Array,
+  default: [],
+},
   grade: {
     type: String,
     default: "A",

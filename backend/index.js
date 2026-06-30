@@ -128,13 +128,18 @@ app.use(express.json({
 // so the frontend can read it and include it in the X-CSRF-Token header.
 const CSRF_COOKIE_NAME = 'csrf-token';
 const CSRF_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const CSRF_ROTATION_GRACE_MS = 10 * 1000; // allow in-flight concurrent requests
 const csrfTokenStore = new Map();
+const csrfGraceTokenStore = new Map();
 
 // Periodic cleanup of expired CSRF tokens to prevent unbounded memory growth
 setInterval(() => {
   const now = Date.now();
   for (const [token, expiry] of csrfTokenStore) {
     if (now > expiry) csrfTokenStore.delete(token);
+  }
+  for (const [token, expiry] of csrfGraceTokenStore) {
+    if (now > expiry) csrfGraceTokenStore.delete(token);
   }
 }, 5 * 60 * 1000);
 
@@ -160,12 +165,19 @@ function generateCsrfToken() {
 function validateCsrfToken(token) {
   if (!token) return false;
   const expiry = csrfTokenStore.get(token);
-  if (!expiry) return false;
-  if (Date.now() > expiry) {
+  const graceExpiry = csrfGraceTokenStore.get(token);
+  const now = Date.now();
+  if (!expiry && !graceExpiry) return false;
+  if (expiry && now > expiry) {
     csrfTokenStore.delete(token);
+  } else if (expiry) {
+    return true;
+  }
+  if (graceExpiry && now > graceExpiry) {
+    csrfGraceTokenStore.delete(token);
     return false;
   }
-  return true;
+  return Boolean(graceExpiry);
 }
 
 // CSRF validation middleware for state-changing methods
@@ -201,8 +213,12 @@ function csrfProtection(req, res, next) {
     if (!validateCsrfToken(headerToken)) {
       return res.status(403).json({ error: 'CSRF token expired. Refresh and try again.' });
     }
-    // Remove old token and rotate
-    csrfTokenStore.delete(headerToken);
+    // Remove old token and rotate. Keep the previous token briefly so
+    // legitimate in-flight concurrent requests do not fail after one request
+    // rotates the CSRF cookie.
+    if (csrfTokenStore.delete(headerToken)) {
+      csrfGraceTokenStore.set(headerToken, Date.now() + CSRF_ROTATION_GRACE_MS);
+    }
     const newToken = generateCsrfToken();
     const csrfCookie = `${CSRF_COOKIE_NAME}=${newToken}; SameSite=Strict; Path=/`;
     const secureFlag = process.env.NODE_ENV === 'production' ? '; Secure' : '';
@@ -234,6 +250,7 @@ app.post('/api/logout', requireApiKey, (req, res) => {
   const cookieToken = req.cookies?.[CSRF_COOKIE_NAME];
   if (cookieToken) {
     csrfTokenStore.delete(cookieToken);
+    csrfGraceTokenStore.delete(cookieToken);
   }
   res.clearCookie(CSRF_COOKIE_NAME, { path: '/' });
   res.clearCookie('session', { path: '/' });

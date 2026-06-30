@@ -660,54 +660,6 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
     totalStylingIssues > 0 && "Improve code style consistency",
   ].filter(Boolean),
 };
-const dependencyReport = {
-  dependencies: [
-    {
-      name: "react",
-      currentVersion: "18.2.0",
-      latestVersion: "19.0.0",
-      risk: "Low",
-      deprecated: false,
-      vulnerable: false,
-      recommendation: "Update to the latest stable version."
-    },
-    {
-      name: "lodash",
-      currentVersion: "4.17.20",
-      latestVersion: "4.17.21",
-      risk: "Medium",
-      deprecated: false,
-      vulnerable: true,
-      recommendation: "Upgrade immediately due to known vulnerabilities."
-    }
-  ]
-};
-const prSummary = {
-  overallPurpose:
-    "AI-generated summary of the repository analysis.",
-
-  filesChanged: files.length,
-
-  majorLogicUpdates: [
-    "Core business logic reviewed",
-    "Repository analyzed successfully",
-  ],
-
-  potentialRisks:
-    totalSecurityIssues > 0
-      ? ["Security issues detected. Review before merging."]
-      : ["No major security risks detected."],
-
-  breakingChanges: [
-    "No breaking changes detected.",
-  ],
-
-  testingRecommendations: [
-    "Run unit tests",
-    "Run integration tests",
-    "Verify all modified files",
-  ],
-};
 
       if (!reviewResult?._mock) {
         try {
@@ -723,8 +675,6 @@ const prSummary = {
             totalStylingIssues,
             totalFindings,
             healthScore,
-            prSummary,
-            dependencyReport,
             repositoryHealth,
             language: language || 'General',
             model: model || 'llama-3.3-70b-versatile',
@@ -762,26 +712,18 @@ if (reviewResult?.fileReviews) {
       // 7. Return result
       return res.json({
   success: true,
-
   repoName,
-
   filesReviewedCount: files.length,
 
   analysis: reviewResult,
 
   repositoryHealth,
 
-  prSummary,
-
   sessionId,
-
   chatAvailable: sessionPersisted,
-
   sessionPersisted,
 
-  ...(fileWarnings.length > 0
-      ? { warnings: fileWarnings }
-      : {})
+  ...(fileWarnings.length > 0 ? { warnings: fileWarnings } : {})
 });
 
     } catch (err) {

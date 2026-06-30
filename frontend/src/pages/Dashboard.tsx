@@ -653,6 +653,7 @@ export default function Dashboard() {
     setIsChatLoading(true);
 
     try {
+      setApiError(null);
       const chatAiSettings = getSavedAiSettings();
       const response = await apiFetch("/api/chat", {
         method: "POST",

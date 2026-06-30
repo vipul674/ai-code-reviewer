@@ -2565,6 +2565,7 @@ export default function Dashboard() {
                       >
                         <button
                           onClick={() => setActiveTab("bugs")}
+                          aria-current={activeTab === "bugs" ? "true" : undefined}
                           style={{
                             padding: "6px",
                             borderRadius: "6px",
@@ -2591,6 +2592,7 @@ export default function Dashboard() {
                         </button>
                         <button
                           onClick={() => setActiveTab("security")}
+                          aria-current={activeTab === "security" ? "true" : undefined}
                           style={{
                             padding: "6px",
                             borderRadius: "6px",
@@ -2618,6 +2620,7 @@ export default function Dashboard() {
                         </button>
                         <button
                           onClick={() => setActiveTab("optimization")}
+                          aria-current={activeTab === "optimization" ? "true" : undefined}
                           style={{
                             padding: "6px",
                             borderRadius: "6px",
@@ -2647,6 +2650,7 @@ export default function Dashboard() {
                         </button>
                         <button
                           onClick={() => setActiveTab("styling")}
+                          aria-current={activeTab === "styling" ? "true" : undefined}
                           style={{
                             padding: "6px",
                             borderRadius: "6px",
@@ -2674,6 +2678,7 @@ export default function Dashboard() {
                         </button>
                         <button
                           onClick={() => setActiveTab("metrics")}
+                          aria-current={activeTab === "metrics" ? "true" : undefined}
                           style={{
                             padding: "6px",
                             borderRadius: "6px",

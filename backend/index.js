@@ -849,7 +849,7 @@ app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async 
         // Update lastAccessedAt for the sliding-window TTL (see issue #743).
         // Each interaction resets the 24-hour expiry countdown. The hard
         // ceiling on absoluteExpiry (7 days) still limits total lifetime.
-        await Session.updateOne({ sessionId }, { $set: { lastAccessedAt: new Date() }, $min: { absoluteExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
+        await Session.updateOne({ sessionId }, { $set: { lastAccessedAt: new Date(), absoluteExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
       }
     } catch (sessionErr) {
       console.warn('❌ Failed to retrieve session from MongoDB:', sessionErr.message);
@@ -868,7 +868,7 @@ app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async 
             // Update lastAccessedAt for activity tracking. createdAt remains
             // unchanged so the original TTL (30 minutes from creation) is
             // preserved, preventing indefinite session extension (see issue #672).
-            await Session.updateOne({ sessionId }, { $set: { lastAccessedAt: new Date() }, $min: { absoluteExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
+            await Session.updateOne({ sessionId }, { $set: { lastAccessedAt: new Date(), absoluteExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
           }
         } catch (sessionErr) {
           console.warn('⚠️ Failed to retrieve session from MongoDB:', sessionErr.message);

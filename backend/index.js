@@ -40,6 +40,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = verifyPort(process.env.PORT || 5000);
 
+const ALLOWED_ANALYSIS_MODELS = ["llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b", "llama-3.1-8b-instant", "gemma2-9b-it"];
+
 // Initialize analysis cache with configurable TTL (default: 1 hour)
 const ANALYSIS_CACHE_TTL_MS = ((n) => Number.isFinite(n) && n > 0 ? n : 60)(parseInt(process.env.ANALYSIS_CACHE_TTL_MINUTES || '60', 10)) * 60 * 1000;
 const analysisCache = new AnalysisCache(ANALYSIS_CACHE_TTL_MS);
@@ -456,11 +458,6 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
 
   maxTokens = Math.max(1, Math.min(128000, parseInt(maxTokens, 10) || 2048));
 
-  const ALLOWED_ANALYSIS_MODELS = ["llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b", "llama-3.1-8b-instant", "gemma2-9b-it"];
-  if (!ALLOWED_ANALYSIS_MODELS.includes(model)) {
-    model = "llama-3.3-70b-versatile";
-  }
-
   if (!repoUrl) {
     return res.status(400).json({ error: 'GitHub Repository URL is required.' });
   }
@@ -839,7 +836,11 @@ if (reviewResult?.fileReviews) {
 
 // 🟢 Route: AI Chat with Repository (session-isolated per issue #59)
 app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async (req, res) => {
-  const { message, history = [], model = 'llama-3.3-70b-versatile', temperature = 0.7, maxTokens = 2048, systemPrompt = 'You are a helpful code reviewer.', sessionId, useRag, ragSources } = req.body;
+  let { message, history = [], model = 'llama-3.3-70b-versatile', temperature = 0.7, maxTokens = 2048, systemPrompt = 'You are a helpful code reviewer.', sessionId, useRag, ragSources } = req.body;
+
+  if (!ALLOWED_ANALYSIS_MODELS.includes(model)) {
+    model = "llama-3.3-70b-versatile";
+  }
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required.' });

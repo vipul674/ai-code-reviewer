@@ -1,50 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import { categorizeFinding } from './severityConfig.js';
 
 const SCHEMA_VERSION = '1.0';
-
-function categorizeFinding(finding) {
-  const message = (finding.message || '').toLowerCase();
-  const ruleId = (finding.rule_id || '').toLowerCase();
-
-  if (message.includes('security') || ruleId.includes('security') ||
-      message.includes('injection') || message.includes('credential') ||
-      message.includes('vulnerability')) {
-    return 'security';
-  }
-
-  if (message.includes('performance') || ruleId.includes('performance') ||
-      message.includes('n+1') || message.includes('cache') ||
-      message.includes('optimization')) {
-    return 'performance';
-  }
-
-  if (message.includes('style') || ruleId.includes('style') ||
-      message.includes('formatting') || message.includes('comma')) {
-    return 'style';
-  }
-
-  return 'other';
-}
-
-function groupFindingsBySeverity(findings) {
-  const grouped = {
-    error: [],
-    warning: [],
-    info: [],
-  };
-
-  for (const finding of findings) {
-    const severity = finding.severity || 'info';
-    if (grouped[severity]) {
-      grouped[severity].push(finding);
-    } else {
-      grouped.info.push(finding);
-    }
-  }
-
-  return grouped;
-}
 
 function generateJSONReport(repoName, files, reviewResult, outputPath) {
   const allFindings = [];
@@ -258,5 +216,4 @@ export {
   generateHTMLReport,
   getReportPath,
   SCHEMA_VERSION,
-  categorizeFinding,
 };

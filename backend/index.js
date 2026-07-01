@@ -323,9 +323,43 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
 // Webhook deduplication and queuing state (module scope to persist across requests)
 const reviewQueue = new ReviewQueue();
 const processedDeliveries = new Map();
-const reviewedShas = new Map();
 const DELIVERY_TTL = 60 * 60 * 1000;
 const MAX_DELIVERY_ENTRIES = 5000;
+
+// SHA-based dedup with TTL to prevent TOCTOU race conditions and stale entries
+class TimedSet {
+  constructor(ttlMs = 3600000) {
+    this._store = new Map();
+    this._ttlMs = ttlMs;
+  }
+  has(key, value) {
+    const entry = this._store.get(key);
+    return entry ? entry.values.has(value) : false;
+  }
+  add(key, value) {
+    if (!this._store.has(key)) {
+      this._store.set(key, { values: new Set(), expiresAt: Date.now() + this._ttlMs });
+    }
+    this._store.get(key).values.add(value);
+  }
+  delete(key, value) {
+    const entry = this._store.get(key);
+    if (entry) {
+      entry.values.delete(value);
+      if (entry.values.size === 0) this._store.delete(key);
+    }
+  }
+  cleanup() {
+    const now = Date.now();
+    for (const [key, entry] of this._store) {
+      if (now > entry.expiresAt) this._store.delete(key);
+    }
+  }
+  get size() {
+    return this._store.size;
+  }
+}
+const reviewedShas = new TimedSet();
 
 const dedupCleanupTimer = setInterval(() => {
   const now = Date.now();
@@ -338,15 +372,11 @@ const dedupCleanupTimer = setInterval(() => {
     const oldest = processedDeliveries.keys().next().value;
     if (oldest !== undefined) processedDeliveries.delete(oldest);
   }
-  for (const [shaKey, shaSet] of reviewedShas) {
-    if (shaSet.size === 0) {
-      reviewedShas.delete(shaKey);
-    }
-  }
+  reviewedShas.cleanup();
 }, 60 * 1000);
 
 const cacheMetricsTimer = setInterval(() => {
-  console.log(`[cache] processedDeliveries=${processedDeliveries.size}/${MAX_DELIVERY_ENTRIES}`);
+  console.log(`[cache] processedDeliveries=${processedDeliveries.size}/${MAX_DELIVERY_ENTRIES} reviewedShas=${reviewedShas.size} exclusiveLocks=${reviewQueue._exclusiveLocks.size}`);
 }, 5 * 60 * 1000);
 
 function cleanupTimers() {
@@ -1058,24 +1088,12 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
       const reviewKey = `${owner}/${repo}/#${pullNumber}`;
 
       const shaKey = `${owner}/${repo}/#${pullNumber}`;
-      if (!reviewedShas.has(shaKey)) {
-        reviewedShas.set(shaKey, new Set());
-      }
-      if (reviewedShas.get(shaKey).has(headSha)) {
+      // Check and mark SHA synchronously before enqueue to close TOCTOU window
+      if (reviewedShas.has(shaKey, headSha)) {
         console.log(`⏭️ Already reviewed commit ${headSha.substring(0,7)} for PR #${pullNumber}`);
         return res.json({ success: true, message: 'Webhook received (duplicate SHA skipped).' });
       }
-      reviewedShas.get(shaKey).add(headSha);
-      const shaTimeout = setTimeout(() => {
-        const set = reviewedShas.get(shaKey);
-        if (set) {
-          set.delete(headSha);
-          if (set.size === 0) {
-            reviewedShas.delete(shaKey);
-          }
-        }
-      }, 3600000);
-      shaTimeout.unref();
+      reviewedShas.add(shaKey, headSha);
       
       console.log(`📡 GitHub Webhook received: PR #${pullNumber} ${action} (${headSha.substring(0,7)}) in ${owner}/${repo}`);
 
@@ -1103,14 +1121,8 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
           await runWebhookReview(item.owner, item.repo, item.pullNumber, item.headSha);
         } catch (error) {
           console.error(`❌ Webhook review failed for ${headSha}:`, error.message);
-          // Remove SHA from reviewedShas so it can be retried on next delivery
-          const shaSet = reviewedShas.get(shaKey);
-          if (shaSet) {
-            shaSet.delete(headSha);
-            if (shaSet.size === 0) {
-              reviewedShas.delete(shaKey);
-            }
-          }
+          // Remove SHA on failure so next delivery can retry
+          reviewedShas.delete(shaKey, headSha);
         }
       });
       if (enqueued === undefined) {

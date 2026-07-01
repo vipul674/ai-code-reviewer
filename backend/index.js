@@ -759,6 +759,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
       } catch (ragErr) {
         console.warn('⚠️ RAG ingestion failed (non-fatal):', ragErr.message);
         ragStatus = 'failed';
+        fileWarnings.push({ file: '(global)', warning: 'RAG code context ingestion failed — review may have limited accuracy' });
       }
 
       // 5. Compute and persist analytics

@@ -991,6 +991,8 @@ const webhookLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  // No keyGenerator: same rationale as analyzeLimiter — req.ip resolved
+  // correctly via trust proxy setting above.
   store: redisClient ? new RedisStore({ sendCommand: (...args) => redisClient.call(...args) }) : undefined,
   message: { error: 'Too many webhook requests.' }
 });

@@ -319,6 +319,7 @@ export default function Dashboard() {
   const [activeExtFilter, setActiveExtFilter] = useState('All');
   const [activeTab, setActiveTab] = useState<'bugs' | 'security' | 'optimization' | 'styling' | 'metrics'>('bugs');
   const [apiError, setApiError] = useState<string | null>(null);
+  const [storageWarning, setStorageWarning] = useState(false);
 
   useEffect(() => {
     if (!apiError) return;
@@ -654,7 +655,7 @@ export default function Dashboard() {
     setChatInput("");
     setChatHistory((prev) => {
       const updated = [...prev, { role: "user" as const, content: userMessage }];
-      try { localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(truncateChatHistory(updated))); } catch {}
+      try { localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(truncateChatHistory(updated))); } catch (e) { if (e instanceof DOMException && e.name === 'QuotaExceededError') setStorageWarning(true); }
       return updated;
     });
     setIsChatLoading(true);
@@ -687,7 +688,7 @@ export default function Dashboard() {
           ...prev,
           { role: "assistant" as const, content: data.response, sources: sources.length > 0 ? sources : undefined },
         ]);
-        try { localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(updated)); } catch {}
+        try { localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(updated)); } catch (e) { if (e instanceof DOMException && e.name === 'QuotaExceededError') setStorageWarning(true); }
         return updated;
       });
     } catch (err: any) {
@@ -1673,7 +1674,47 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* 2. Loading State */}
+          {/* 2. Storage Warning Banner */}
+          {storageWarning && (
+            <div
+              style={{
+                background: "rgba(234, 179, 8, 0.1)",
+                border: "1px solid rgba(234, 179, 8, 0.3)",
+                borderRadius: "8px",
+                padding: "14px 20px",
+                color: "#fde047",
+                fontSize: "13px",
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+                marginBottom: "20px",
+              }}
+            >
+              <AlertTriangle size={20} style={{ color: "#eab308" }} />
+              <div>
+                <strong style={{ display: "block" }}>
+                  Storage Quota Exceeded
+                </strong>
+                <span>Chat history could not be saved. Local storage is full. Clear old history or export it to free space.</span>
+              </div>
+              <button
+                onClick={() => setStorageWarning(false)}
+                style={{
+                  marginLeft: "auto",
+                  background: "transparent",
+                  border: "none",
+                  color: "#fde047",
+                  cursor: "pointer",
+                  fontSize: "16px",
+                  padding: "4px 8px",
+                }}
+              >
+                ×
+              </button>
+            </div>
+          )}
+
+          {/* 3. Loading State */}
           {isLoading && (
             <div
               style={{

@@ -320,6 +320,57 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
   }
 }
 
+// Utility: generate dependency report by scanning cloned repo for package manifests
+const DEPENDENCY_REGISTRIES = {
+  'package.json': async (filePath) => {
+    const pkg = JSON.parse(await fs.promises.readFile(filePath, 'utf-8'));
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    const results = [];
+    const maxCheck = 10;
+    let checked = 0;
+    for (const [name, version] of Object.entries(deps)) {
+      if (checked >= maxCheck) {
+        results.push({ name, currentVersion: version.replace('^', '').replace('~', ''), latestVersion: 'unknown', risk: 'Unknown', deprecated: false, vulnerable: false, recommendation: 'Manual review recommended.' });
+        continue;
+      }
+      try {
+        const resp = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`, { signal: AbortSignal.timeout(5000) });
+        if (resp.ok) {
+          const data = await resp.json();
+          const current = version.replace('^', '').replace('~', '');
+          const latest = data.version || 'unknown';
+          const isOutdated = latest !== 'unknown' && current !== latest;
+          const semverCurrent = current.split('.').map(Number);
+          const semverLatest = latest.split('.').map(Number);
+          const isMajor = isOutdated && semverCurrent[0] < semverLatest[0];
+          results.push({ name, currentVersion: current, latestVersion: latest, risk: isMajor ? 'High' : isOutdated ? 'Medium' : 'Low', deprecated: false, vulnerable: false, recommendation: isOutdated ? `Update from ${current} to ${latest}.` : 'Up to date.' });
+        } else {
+          results.push({ name, currentVersion: version, latestVersion: 'unknown', risk: 'Unknown', deprecated: false, vulnerable: false, recommendation: 'Could not check npm registry.' });
+        }
+      } catch {
+        results.push({ name, currentVersion: version, latestVersion: 'unknown', risk: 'Unknown', deprecated: false, vulnerable: false, recommendation: 'Could not check npm registry.' });
+      }
+      checked++;
+    }
+    return results;
+  },
+};
+async function generateDependencyReport(clonePath) {
+  const deps = [];
+  for (const [manifest, checker] of Object.entries(DEPENDENCY_REGISTRIES)) {
+    const filePath = path.join(clonePath, manifest);
+    if (fs.existsSync(filePath)) {
+      try {
+        const found = await checker(filePath);
+        deps.push(...found);
+      } catch (err) {
+        console.warn(`⚠️ Failed to parse ${manifest}: ${err.message}`);
+      }
+    }
+  }
+  return { dependencies: deps };
+}
+
 // Webhook deduplication and queuing state (module scope to persist across requests)
 const reviewQueue = new ReviewQueue();
 const processedDeliveries = new Map();
@@ -706,28 +757,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
     totalStylingIssues > 0 && "Improve code style consistency",
   ].filter(Boolean),
 };
-const dependencyReport = {
-  dependencies: [
-    {
-      name: "react",
-      currentVersion: "18.2.0",
-      latestVersion: "19.0.0",
-      risk: "Low",
-      deprecated: false,
-      vulnerable: false,
-      recommendation: "Update to the latest stable version."
-    },
-    {
-      name: "lodash",
-      currentVersion: "4.17.20",
-      latestVersion: "4.17.21",
-      risk: "Medium",
-      deprecated: false,
-      vulnerable: true,
-      recommendation: "Upgrade immediately due to known vulnerabilities."
-    }
-  ]
-};
+const dependencyReport = await generateDependencyReport(clonePath);
 const prSummary = {
   overallPurpose:
     "AI-generated summary of the repository analysis.",

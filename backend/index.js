@@ -312,8 +312,8 @@ process.on('SIGINT', onShutdown);
 process.on('SIGTERM', onShutdown);
 
 // Repository contexts for chat are now persisted in MongoDB via the Session model.
-// The Session collection uses a TTL index (expireAfterSeconds: 1800) so MongoDB
-// handles expiry automatically — no in-process Map or setInterval needed.
+// The Session collection uses a TTL index on absoluteExpiry (expireAfterSeconds: 0)
+// so MongoDB handles expiry automatically — no in-process Map or setInterval needed.
 
 // Utility: fetch with configurable timeout using AbortController
 async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
@@ -953,9 +953,9 @@ app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async 
           return res.status(403).json({ error: 'Access denied: this session does not belong to you.' });
         }
         // Update lastAccessedAt for the sliding-window TTL (see issue #743).
-        // Each interaction resets the 24-hour expiry countdown. The hard
-        // ceiling on absoluteExpiry (7 days) still limits total lifetime.
-        await Session.updateOne({ sessionId }, { $set: { lastAccessedAt: new Date() }, $min: { absoluteExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
+        // Each interaction extends absoluteExpiry to 24h from now via $max.
+        // The initial default (24h from creation) sets the first expiry window.
+        await Session.updateOne({ sessionId }, { $set: { lastAccessedAt: new Date() }, $max: { absoluteExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
       }
     } catch (sessionErr) {
       console.warn('❌ Failed to retrieve session from MongoDB:', sessionErr.message);
@@ -969,12 +969,6 @@ app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async 
       let context = null;
       try {
         context = await Session.findOne({ sessionId });
-        if (context) {
-          // Update lastAccessedAt for activity tracking. createdAt remains
-          // unchanged so the original TTL (30 minutes from creation) is
-          // preserved, preventing indefinite session extension (see issue #672).
-          await Session.updateOne({ sessionId }, { $set: { lastAccessedAt: new Date() }, $min: { absoluteExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
-        }
       } catch (sessionErr) {
         console.warn('⚠️ Failed to retrieve session from MongoDB:', sessionErr.message);
       }

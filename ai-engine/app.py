@@ -64,13 +64,15 @@ def sanitize_file_content(content: str) -> str:
 def _redact_key(text: str, key: str) -> str:
     if not text or not key:
         return text
+    # Redact the full key
     escaped = re.escape(key)
     text = re.sub(escaped, "***", text)
     for trunc_suffix in ["...", "…", " (truncated)"]:
         truncated = re.escape(key[:len(key) // 2] + trunc_suffix)
         text = re.sub(truncated, "***", text)
-    if len(key) > 16:
-        text = re.sub(re.escape(key[:16]), "***", text)
+    # Also redact any prefix of the key to prevent partial exposure
+    for i in range(1, len(key)):
+        text = re.sub(re.escape(key[:i]), "***", text)
     return text
 
 ALLOWED_TAGS = [

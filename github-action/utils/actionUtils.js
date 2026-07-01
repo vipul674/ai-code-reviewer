@@ -56,3 +56,8 @@ export function cleanAndParseJSON(responseText) {
     return { reviews: [] };
   }
 }
+
+export function normalizeReviewLineNumber(value) {
+  const line = Number(value);
+  return Number.isInteger(line) && line > 0 ? line : null;
+}

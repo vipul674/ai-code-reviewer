@@ -4,6 +4,7 @@ import Groq from 'groq-sdk';
 import { parseDiff } from './utils/diffParser.js';
 import { scanSecretsInChanges } from './utils/secretsScanner.js';
 import { globToRegex } from './utils/globToRegex.js';
+import { normalizeReviewLineNumber } from './utils/actionUtils.js';
 
 function cleanAndParseJSON(responseText) {
   try {
@@ -172,13 +173,14 @@ If no issues are found, reply with: { "reviews": [] }`;
         if (issues.length > 0) {
           console.log(`✅ AI review returned ${issues.length} comments for ${file.path}`);
           for (const issue of issues) {
-            const changeExists = file.changes.some(c => c.line === issue.line);
+            const issueLine = normalizeReviewLineNumber(issue.line);
+            const changeExists = issueLine !== null && file.changes.some(c => c.line === issueLine);
             if (changeExists) {
-              const alreadyFlagged = commentsToPost.some(c => c.path === file.path && c.line === issue.line);
+              const alreadyFlagged = commentsToPost.some(c => c.path === file.path && c.line === issueLine);
               if (!alreadyFlagged) {
                 commentsToPost.push({
                   path: file.path,
-                  line: issue.line,
+                  line: issueLine,
                   body: `<!-- RepoSage Review Comment -->\n${issue.comment}`
                 });
               }

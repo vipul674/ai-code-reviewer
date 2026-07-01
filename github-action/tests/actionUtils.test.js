@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { globToRegex, cleanAndParseJSON } from '../utils/actionUtils.js';
+import { globToRegex, cleanAndParseJSON, normalizeReviewLineNumber } from '../utils/actionUtils.js';
 
 // ---------------------------------------------------------------------------
 // globToRegex
@@ -112,4 +112,16 @@ test('cleanAndParseJSON handles null-like plain text', () => {
 test('cleanAndParseJSON handles JSON arrays', () => {
   const result = cleanAndParseJSON('[1, 2, 3]');
   assert.deepStrictEqual(result, [1, 2, 3]);
+});
+
+test('normalizeReviewLineNumber accepts numbers and numeric strings', () => {
+  assert.equal(normalizeReviewLineNumber(12), 12);
+  assert.equal(normalizeReviewLineNumber('12'), 12);
+});
+
+test('normalizeReviewLineNumber rejects invalid line values', () => {
+  assert.equal(normalizeReviewLineNumber('abc'), null);
+  assert.equal(normalizeReviewLineNumber(0), null);
+  assert.equal(normalizeReviewLineNumber(-1), null);
+  assert.equal(normalizeReviewLineNumber(1.5), null);
 });

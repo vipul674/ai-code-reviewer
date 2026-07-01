@@ -927,10 +927,28 @@ app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async 
 });
 
 // 🟢 Route: Proxy for RAG query — forwards to the AI engine
-app.post('/api/rag/query', requireApiKey, async (req, res) => {
-  const { question, repoUrl } = req.body;
+app.post('/api/rag/query', requireApiKey, requireJsonContentType, async (req, res) => {
+  const { question, sessionId } = req.body;
   if (!question) {
     return res.status(400).json({ error: 'question is required.' });
+  }
+  if (!sessionId) {
+    return res.status(400).json({ error: 'sessionId is required.' });
+  }
+
+  let context;
+  try {
+    context = await Session.findOne({ sessionId });
+  } catch (sessionErr) {
+    console.warn('❌ Failed to retrieve RAG session from MongoDB:', sessionErr.message);
+    return res.status(500).json({ error: 'Failed to validate RAG session.' });
+  }
+
+  if (!context) {
+    return res.status(404).json({ error: 'RAG session expired or not found.' });
+  }
+  if (context.ownerToken && context.ownerToken !== req.clientId) {
+    return res.status(403).json({ error: 'Access denied: this session does not belong to you.' });
   }
 
   const aiEngineUrl = process.env.AI_ENGINE_URL || 'http://localhost:8000';
@@ -940,7 +958,7 @@ app.post('/api/rag/query', requireApiKey, async (req, res) => {
     const aiResponse = await fetchWithTimeout(`${baseUrl}/api/rag/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REPOSAGE_API_KEY || '' },
-      body: JSON.stringify({ question, repo_url: repoUrl })
+      body: JSON.stringify({ question, repo_url: context.repoUrl })
     }, 30000);
 
     if (aiResponse.ok) {

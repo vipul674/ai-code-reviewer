@@ -32,6 +32,8 @@ import { connectDatabase, ensureConnection, closeDatabase } from './config/db.js
 
 dotenv.config();
 
+const octokit = new Octokit({ auth: process.env.GITHUB_PAT || undefined });
+
 connectDatabase();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -485,19 +487,22 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
   const maxSizeBytes = maxRepoSizeMB * 1024 * 1024;
 
   // Pre-clone size check via GitHub API to prevent disk exhaustion
-  try {
-    const octokit = new Octokit({ auth: process.env.GITHUB_PAT || undefined });
-    const { data: repoData } = await octokit.rest.repos.get({ owner, repo: repoName });
-    const repoSizeBytes = (repoData.size || 0) * 1024;
-    if (repoSizeBytes > maxSizeBytes) {
-      return res.status(413).json({ error: `Repository exceeds the maximum allowed size of ${maxRepoSizeMB}MB (Reported size: ~${Math.round(repoSizeBytes/1024/1024)}MB).` });
+  if (process.env.GITHUB_PAT) {
+    try {
+      const { data: repoData } = await octokit.rest.repos.get({ owner, repo: repoName });
+      const repoSizeBytes = (repoData.size || 0) * 1024;
+      if (repoSizeBytes > maxSizeBytes) {
+        return res.status(413).json({ error: `Repository exceeds the maximum allowed size of ${maxRepoSizeMB}MB (Reported size: ~${Math.round(repoSizeBytes/1024/1024)}MB).` });
+      }
+    } catch (err) {
+      if (err.status !== 403 && err.status !== 429) {
+        console.error(`❌ GitHub API error verifying size for ${owner}/${repoName}: ${err.message}`);
+        return res.status(502).json({ error: `Failed to verify repository size: ${err.message}. Check GITHUB_PAT configuration.` });
+      }
+      console.warn(`Could not verify repository size via GitHub API for ${owner}/${repoName}. Proceeding to clone with filters...`);
     }
-  } catch (err) {
-    if (process.env.GITHUB_PAT && err.status !== 403 && err.status !== 429) {
-      console.error(`❌ GitHub API error verifying size for ${owner}/${repoName}: ${err.message}`);
-      return res.status(502).json({ error: `Failed to verify repository size: ${err.message}. Check GITHUB_PAT configuration.` });
-    }
-    console.warn(`Could not verify repository size via GitHub API for ${owner}/${repoName}. Proceeding to clone with filters...`);
+  } else {
+    console.warn('No GITHUB_PAT configured — skipping pre-clone size check. Set MAX_REPO_SIZE_MB to enforce limit at clone time.');
   }
 
   const uniqueId = crypto.randomUUID();

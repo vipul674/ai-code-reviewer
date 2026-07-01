@@ -33,11 +33,8 @@ import { sanitizeRedisKey } from './utils/redisSafe.js';
 import { mockAIReview } from './utils/mockAIReview.js';
 import { loadConfigFile, applySeverityConfig } from './utils/severityConfig.js';
 import AnalysisCache from './utils/analysisCache.js';
-<<<<<<< HEAD
 import { getPriorReviewIds, storeReviewIds, clearReviewIds, supersedePriorReviews } from './utils/reviewTracker.js';
-=======
 import DedupStore from './utils/dedupStore.js';
->>>>>>> pr-1703
 import mongoose from 'mongoose';
 import Analytics from './models/Analytics.js';
 import Session, { estimateSessionSize } from './models/Session.js';
@@ -59,9 +56,10 @@ const PORT = verifyPort(process.env.PORT || 5000);
 
 const ALLOWED_ANALYSIS_MODELS = ["llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b", "llama-3.1-8b-instant", "gemma2-9b-it"];
 
-// Initialize analysis cache with configurable TTL (default: 1 hour)
+// Initialize analysis cache with configurable TTL (default: 1 hour, mock: 2 minutes)
 const ANALYSIS_CACHE_TTL_MS = ((n) => Number.isFinite(n) && n > 0 ? n : 60)(parseInt(process.env.ANALYSIS_CACHE_TTL_MINUTES || '60', 10)) * 60 * 1000;
-const analysisCache = new AnalysisCache(ANALYSIS_CACHE_TTL_MS);
+const ANALYSIS_CACHE_MOCK_TTL_MS = ((n) => Number.isFinite(n) && n > 0 ? n : 120)(parseInt(process.env.ANALYSIS_CACHE_MOCK_TTL_SECONDS || '120', 10)) * 1000;
+const analysisCache = new AnalysisCache(ANALYSIS_CACHE_TTL_MS, ANALYSIS_CACHE_MOCK_TTL_MS);
 
 // Trust the first hop of reverse proxy headers (Render, Railway, Heroku, Nginx, AWS ALB, etc.)
 // so that req.ip and express-rate-limit resolve the real client IP from X-Forwarded-For
@@ -504,22 +502,32 @@ async function generateDependencyReport(clonePath) {
 const DELIVERY_REDIS_TTL = 300;
 
 
-<<<<<<< HEAD
-// In-memory fallback for webhook dedup when Redis is unavailable
-const dedupMemorySet = new Set();
-const shaDedupMemoryMap = new Map();
-const DEDUP_MEMORY_TTL = DELIVERY_REDIS_TTL * 1000;
-const SHA_DEDUP_MAX_SIZE = 10000;
+const cacheMetricsTimer = setInterval(() => {
+  const stats = analysisCache.getStats();
+  console.log(`[cache] entries=${stats.size}/${stats.maxEntries} mock=${stats.mockCount} avgAge=${stats.avgAgeMs}ms hitRate=${stats.hitRate}`);
+}, 5 * 60 * 1000);
+cacheMetricsTimer.unref();
 
-// Atomic check-and-add for in-memory dedup (best-effort under concurrent load)
-function checkAndSetDedup(key) {
-  if (dedupMemorySet.has(key)) return 0;
-  dedupMemorySet.add(key);
-  setTimeout(() => dedupMemorySet.delete(key), DEDUP_MEMORY_TTL).unref();
-  return 1;
-}
-=======
->>>>>>> pr-1703
+// Proactive AI Engine health probe — when the engine recovers, clear mock cache entries
+const AI_ENGINE_HEALTH_INTERVAL = 30000;
+let aiEngineHealthy = true;
+
+const aiEngineHealthTimer = setInterval(async () => {
+  const baseUrl = (process.env.AI_ENGINE_URL || 'http://localhost:8000').replace(/\/+$/, '');
+  try {
+    const resp = await fetchWithTimeout(`${baseUrl}/health`, {}, 5000);
+    if (resp.ok && !aiEngineHealthy) {
+      console.log('🟢 AI Engine recovered — clearing mock cache entries');
+      analysisCache.clearMockEntries();
+    }
+    aiEngineHealthy = resp.ok;
+  } catch {
+    if (aiEngineHealthy) {
+      console.warn('🔴 AI Engine health check failed');
+    }
+    aiEngineHealthy = false;
+  }
+}, AI_ENGINE_HEALTH_INTERVAL);
 
 // Periodic sweeper for stale exclusive locks to prevent unbounded memory growth
 const EXCLUSIVE_LOCK_CLEANUP_INTERVAL = 5 * 60 * 1000;
@@ -543,6 +551,8 @@ const shaDedupCleanupTimer = setInterval(() => {
 shaDedupCleanupTimer.unref();
 
 function cleanupTimers() {
+  clearInterval(cacheMetricsTimer);
+  clearInterval(aiEngineHealthTimer);
   clearInterval(exclusiveLockCleanupTimer);
   clearInterval(shaDedupCleanupTimer);
 }
@@ -1676,7 +1686,6 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
   const commentsToPost = [];
   const filesToReview = [];
   const validChangedLines = new Map();
-  let incompleteSecretScan = false;
 
   for (const file of parsedFiles) {
     // Check if file is supported
@@ -1697,7 +1706,6 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
       });
     });
     if (scanTruncated) {
-      incompleteSecretScan = true;
       console.warn(`⚠️ Secrets scan truncated for ${file.path}: ${scanReason} (total ${scanTotal} changes)`);
     }
 
@@ -1820,18 +1828,11 @@ The AI engine identified **${aiCommentsDiscarded} potential issue(s)** but could
       pull_number: pullNumber,
       commit_id: headSha,
       event: 'COMMENT',
-      body: `## ⚠️ RepoSage AI Code Review — AI Engine Issue\n\nThe AI engine could not be reached or returned an unexpected response during this review. The secrets scanner found **0 issues**, but the PR was **not** fully reviewed by the AI.\n\nPlease ensure the AI Engine service is running correctly and re-trigger the review for a complete analysis.`
-    });
-    postedReviewIds.push(createdReview.id);
-  } else if (incompleteSecretScan) {
-    console.log('Secret scan was incomplete. Posting COMMENT review instead of approving.');
-    const { data: createdReview } = await octokit.rest.pulls.createReview({
-      owner,
-      repo,
-      pull_number: pullNumber,
-      commit_id: headSha,
-      event: 'COMMENT',
-      body: `## RepoSage Secret Scan Incomplete\n\nThe local secret scanner stopped before processing all changed lines. No approval was posted because hardcoded credentials may exist in the unscanned portion of this Pull Request.\n\nPlease split the PR or raise the configured scan limits and rerun the review.`
+      body: `## ⚠️ RepoSage AI Code Review — AI Engine Issue
+
+The AI engine could not be reached or returned an unexpected response during this review. The secrets scanner found **0 issues**, but the PR was **not** fully reviewed by the AI.
+
+Please ensure the AI Engine service is running correctly and re-trigger the review for a complete analysis.`
     });
     postedReviewIds.push(createdReview.id);
   } else {

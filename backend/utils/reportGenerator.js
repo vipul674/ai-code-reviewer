@@ -1,6 +1,16 @@
 import fs from 'fs';
 import path from 'path';
 
+function escapeHtml(str) {
+  if (typeof str !== 'string') return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const SCHEMA_VERSION = '1.0';
 
 function categorizeFinding(finding) {
@@ -146,12 +156,12 @@ function generateHTMLReport(repoName, files, reviewResult, outputPath) {
 
   const findingRows = sortedFindings.map(f => `
     <tr>
-      <td>${f.file}</td>
-      <td>${f.line}</td>
-      <td><span style="background-color: ${severityColors[f.severity]}; color: white; padding: 4px 8px; border-radius: 3px; font-weight: bold;">${f.severity}</span></td>
-      <td>${f.category}</td>
-      <td>${f.rule_id}</td>
-      <td>${f.message}</td>
+      <td>${escapeHtml(f.file)}</td>
+      <td>${escapeHtml(String(f.line))}</td>
+      <td><span style="background-color: ${severityColors[f.severity]}; color: white; padding: 4px 8px; border-radius: 3px; font-weight: bold;">${escapeHtml(f.severity)}</span></td>
+      <td>${escapeHtml(f.category)}</td>
+      <td>${escapeHtml(f.rule_id)}</td>
+      <td>${escapeHtml(f.message)}</td>
     </tr>
   `).join('');
 
@@ -186,7 +196,7 @@ function generateHTMLReport(repoName, files, reviewResult, outputPath) {
   <div class="container">
     <h1>Code Review Report</h1>
     <div class="meta">
-      <strong>Repository:</strong> ${repoName}<br>
+      <strong>Repository:</strong> ${escapeHtml(repoName)}<br>
       <strong>Generated:</strong> ${new Date().toLocaleString()}<br>
       <strong>Files Reviewed:</strong> ${files.length}
     </div>

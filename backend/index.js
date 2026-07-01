@@ -1745,9 +1745,13 @@ app.get("/api/review-history", requireApiKey, async (req, res) => {
 app.get("/api/review-history/:repo", requireApiKey, async (req, res) => {
 
     try {
+        const repo = req.params.repo;
+        if (typeof repo !== 'string' || repo.length === 0) {
+          return res.status(400).json({ error: 'Invalid repo parameter.' });
+        }
 
         const history = await Analytics.find({
-            repoName: req.params.repo
+            repoName: repo
         }).sort({
             analyzedAt: -1
         });

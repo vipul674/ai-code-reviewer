@@ -277,7 +277,7 @@ app.post('/api/logout', requireApiKey, (req, res) => {
 });
 
 // CSRF token retrieval for clients that need a fresh token
-app.get('/api/csrf-token', requireApiKey, (req, res) => {
+app.get('/api/csrf-token', (req, res) => {
   const csrfToken = generateCsrfToken();
   res.cookie(CSRF_COOKIE_NAME, csrfToken, {
     httpOnly: false,

@@ -770,7 +770,7 @@ export default function Dashboard() {
   };
 
   const calculateTotalFindings = (result: BackendResponse) => {
-    return Object.values(result.analysis.fileReviews || {}).reduce((total, review) => {
+    return Object.values(result.analysis?.fileReviews || {}).reduce((total, review) => {
       return total +
         (review.bugs?.length || 0) +
         (review.security?.length || 0) +
@@ -827,7 +827,7 @@ export default function Dashboard() {
     setFileFilterQuery('');
     setActiveExtFilter('All');
 
-    const filesList = Object.keys(entry.response.analysis.fileReviews || {});
+    const filesList = Object.keys(entry.response.analysis?.fileReviews || {});
     setSelectedFile(filesList[0] || null);
   };
 
@@ -900,7 +900,7 @@ export default function Dashboard() {
       setChatHistory([]);
 
       // Select the first file reviewed automatically
-      const filesList = Object.keys(data.analysis.fileReviews);
+      const filesList = Object.keys(data.analysis?.fileReviews || {});
       if (filesList.length > 0) {
         setSelectedFile(filesList[0]);
       }
@@ -924,7 +924,7 @@ export default function Dashboard() {
   const downloadReadme = () => {
     if (!analysisResult) return;
     const element = document.createElement("a");
-    const file = new Blob([analysisResult.analysis.generatedReadme], {
+    const file = new Blob([analysisResult.analysis?.generatedReadme || ''], {
       type: "text/plain",
     });
     element.href = URL.createObjectURL(file);

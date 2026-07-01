@@ -338,8 +338,13 @@ const dedupCleanupTimer = setInterval(() => {
     const oldest = processedDeliveries.keys().next().value;
     if (oldest !== undefined) processedDeliveries.delete(oldest);
   }
-  for (const [shaKey, shaSet] of reviewedShas) {
-    if (shaSet.size === 0) {
+  for (const [shaKey, shaMap] of reviewedShas) {
+    for (const [headSha, timestamp] of shaMap) {
+      if (now - timestamp > DELIVERY_TTL) {
+        shaMap.delete(headSha);
+      }
+    }
+    if (shaMap.size === 0) {
       reviewedShas.delete(shaKey);
     }
   }
@@ -1090,10 +1095,10 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
           await runWebhookReview(item.owner, item.repo, item.pullNumber, item.headSha);
         } catch (error) {
           console.error(`❌ Webhook review failed for ${headSha}:`, error.message);
-          const shaSet = reviewedShas.get(shaKey);
-          if (shaSet) {
-            shaSet.delete(headSha);
-            if (shaSet.size === 0) {
+          const shaMap = reviewedShas.get(shaKey);
+          if (shaMap) {
+            shaMap.delete(headSha);
+            if (shaMap.size === 0) {
               reviewedShas.delete(shaKey);
             }
           }
@@ -1101,19 +1106,9 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
       });
       if (enqueuePromise) {
         if (!reviewedShas.has(shaKey)) {
-          reviewedShas.set(shaKey, new Set());
+          reviewedShas.set(shaKey, new Map());
         }
-        reviewedShas.get(shaKey).add(headSha);
-        const shaTimeout = setTimeout(() => {
-          const set = reviewedShas.get(shaKey);
-          if (set) {
-            set.delete(headSha);
-            if (set.size === 0) {
-              reviewedShas.delete(shaKey);
-            }
-          }
-        }, 3600000);
-        shaTimeout.unref();
+        reviewedShas.get(shaKey).set(headSha, Date.now());
       } else {
         return res.status(429).json({ error: 'Review queue full. Try again later.' });
       }

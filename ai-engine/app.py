@@ -614,7 +614,24 @@ async def chat_with_repository(request: ChatRequest):
     
     # 1. Build the system prompt injecting repository context
     message_lower = message.lower()
-    keywords = set(re.findall(r'\b\w+\b', message_lower))
+    STOP_WORDS = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+                  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+                  'should', 'may', 'might', 'can', 'shall', 'to', 'of', 'in', 'for',
+                  'on', 'with', 'at', 'by', 'from', 'as', 'into', 'through', 'during',
+                  'this', 'that', 'these', 'those', 'it', 'its', 'and', 'or', 'but',
+                  'not', 'no', 'nor', 'so', 'if', 'then', 'else', 'when', 'where',
+                  'why', 'how', 'all', 'each', 'every', 'both', 'few', 'more', 'most',
+                  'other', 'some', 'such', 'only', 'own', 'same', 'very', 'here',
+                  'there', 'about', 'above', 'after', 'again', 'against', 'below',
+                  'between', 'up', 'down', 'out', 'off', 'over', 'under', 'too', 'just',
+                  'also', 'get', 'got', 'use', 'used', 'using', 'make', 'made',
+                  'making', 'take', 'took', 'taken', 'taking', 'find', 'found',
+                  'finding', 'new', 'one', 'two', 'like', 'well', 'back', 'still',
+                  'any', 'many', 'much', 'something', 'thing', 'file', 'code', 'data',
+                  'function', 'method', 'class', 'return', 'value', 'name', 'type',
+                  'set', 'list', 'object', 'string', 'number', 'key', 'add'}
+
+    keywords = set(re.findall(r'\b\w+\b', message_lower)) - STOP_WORDS
 
     def score_file(f):
         name_lower = f.name.lower()

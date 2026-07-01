@@ -512,8 +512,6 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
     await git.clone(repoUrl, clonePath, ['--depth', '1', '--single-branch', `--filter=blob:limit=${maxRepoSizeMB}m`]);
 
     // Check repository size
-    const maxRepoSizeMB = parseInt(process.env.MAX_REPO_SIZE_MB) || 100;
-    const maxSizeBytes = maxRepoSizeMB * 1024 * 1024;
     const repoSize = await getFolderSize(clonePath);
     
     if (repoSize > maxSizeBytes) {

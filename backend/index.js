@@ -1227,21 +1227,12 @@ app.post('/api/issues/create', requireApiKey, issueLimiter, async (req, res) => 
     }
   }
 
-  try {
-    let parsedUrl;
-    try {
-      parsedUrl = new URL(repoUrl);
-    } catch {
-      return res.status(400).json({ error: 'Invalid GitHub repository URL.' });
-    }
-    if (parsedUrl.hostname !== 'github.com') {
-      return res.status(400).json({ error: 'URL must be a github.com repository.' });
-    }
-    const pathParts = parsedUrl.pathname.replace(/\.git$/, '').replace(/\/$/, '').split('/').filter(Boolean);
-    if (pathParts.length < 2) {
-      return res.status(400).json({ error: 'Invalid GitHub repository URL structure.' });
-    }
-    const [owner, repo] = pathParts;
+  if (!isValidRepoUrl(repoUrl)) {
+    return res.status(400).json({ error: 'Invalid GitHub repository URL. Only https://github.com/owner/repo URLs are allowed.' });
+  }
+  const parsed = parseRepoUrl(repoUrl);
+  const owner = parsed.owner;
+  const repo = parsed.repo;
 
     const octokit = new Octokit({ auth: token });
     

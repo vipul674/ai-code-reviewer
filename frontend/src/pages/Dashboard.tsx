@@ -934,6 +934,8 @@ export default function Dashboard() {
     document.body.removeChild(element);
   };
 
+  const chatInputEmpty = !chatInput.trim();
+
   return (
     <div
       style={{
@@ -4059,7 +4061,7 @@ export default function Dashboard() {
                       />
                       <button
                         type="submit"
-                        disabled={isChatLoading || !chatInput.trim()}
+                        disabled={isChatLoading || chatInputEmpty}
                         style={{
                           background:
                             "linear-gradient(135deg, #a855f7 0%, #3b82f6 100%)",
@@ -4071,7 +4073,7 @@ export default function Dashboard() {
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
-                          opacity: isChatLoading || !chatInput.trim() ? 0.6 : 1,
+                          opacity: isChatLoading || chatInputEmpty ? 0.6 : 1,
                           transition: "opacity 0.15s ease",
                         }}
                       >

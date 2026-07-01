@@ -409,6 +409,7 @@ const dedupCleanupTimer = setInterval(() => {
 }, 60 * 1000);
 
 const cacheMetricsTimer = setInterval(() => {
+  if (process.env.NODE_ENV === 'production') return;
   console.log(`[cache] processedDeliveries=${processedDeliveries.size}/${MAX_DELIVERY_ENTRIES} exclusiveLocks=${reviewQueue._exclusiveLocks.size}`);
 }, 5 * 60 * 1000);
 

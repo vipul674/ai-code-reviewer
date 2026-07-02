@@ -244,11 +244,11 @@ function csrfProtection(req, res, next) {
       csrfGraceTokenStore.set(headerToken, Date.now() + CSRF_ROTATION_GRACE_MS);
     }
     const newToken = generateCsrfToken();
-    const csrfCookie = `${CSRF_COOKIE_NAME}=${newToken}; SameSite=Strict; Path=/`;
-    const secureFlag = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-    const existingCookies = res.getHeader('Set-Cookie') || [];
-    const cookies = Array.isArray(existingCookies) ? existingCookies : [existingCookies];
-    res.setHeader('Set-Cookie', [...cookies, csrfCookie + secureFlag]);
+    res.cookie(CSRF_COOKIE_NAME, newToken, {
+      sameSite: 'strict',
+      path: '/',
+      secure: process.env.NODE_ENV === 'production',
+    });
     // Expose new token in response for the frontend
     res.locals.rotatedCsrfToken = newToken;
   }
@@ -263,9 +263,11 @@ app.post('/api/session', requireApiKey, (req, res) => {
   if (!sessionCookie) return;
 
   const csrfToken = generateCsrfToken();
-  const csrfCookie = `${CSRF_COOKIE_NAME}=${csrfToken}; SameSite=Strict; Path=/`;
-  const secureFlag = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', [sessionCookie, csrfCookie + secureFlag]);
+  res.cookie(CSRF_COOKIE_NAME, csrfToken, {
+    sameSite: 'strict',
+    path: '/',
+    secure: process.env.NODE_ENV === 'production',
+  });
   return res.json({ success: true, csrfToken });
 });
 

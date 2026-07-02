@@ -1324,6 +1324,7 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
 
   // Track whether the AI engine was successfully queried
   let aiEngineQueried = false;
+  let aiCommentsDiscarded = 0;
 
   if (filesToReview.length > 0) {
     console.log(`🧠 Querying AI engine for ${filesToReview.length} files...`);
@@ -1344,6 +1345,7 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
             const validLines = validChangedLines.get(c.path);
             if (!validLines || !validLines.has(Number(c.line))) {
               console.warn(`⚠️ Skipping invalid inline comment location ${c.path}:${c.line}`);
+              aiCommentsDiscarded++;
               return;
             }
             // Avoid duplicate comments if secrets scanner already flagged it
@@ -1352,6 +1354,9 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
               commentsToPost.push(c);
             }
           });
+          if (aiCommentsDiscarded > 0) {
+            console.warn(`⚠️ ${aiCommentsDiscarded} AI comments could not be posted due to line number mismatches with the diff`);
+          }
         }
         aiEngineQueried = true;
       }
@@ -1376,6 +1381,20 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
       event: 'COMMENT',
       body,
       comments: commentsToPost
+    });
+  } else if (aiCommentsDiscarded > 0) {
+    console.warn(`⚠️ ${aiCommentsDiscarded} AI comments were discarded due to line number mismatches — posting COMMENT review instead of approving.`);
+    await octokit.rest.pulls.createReview({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      commit_id: headSha,
+      event: 'COMMENT',
+      body: `## ⚠️ RepoSage AI Code Review — Incomplete Review
+
+The AI engine identified **${aiCommentsDiscarded} potential issue(s)** but could not determine exact line positions within the diff. These comments were filtered out to avoid inaccurate inline annotations.
+
+**Action required:** Please manually review the changes for issues the AI may have detected. Re-run the review after pushing additional changes to re-evaluate.`
     });
   } else if (!aiEngineQueried) {
     console.error('❌ AI Engine was unreachable — posting COMMENT review instead of auto-approving.');

@@ -785,7 +785,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
   breakdown: {
     security: Math.max(0, 100 - totalSecurityIssues * 15),
     maintainability: Math.max(0, 100 - totalBugs * 3),
-    optimization: Math.max(0, 100 - totalOptimizations * 2),
+    optimization: Math.max(0, 100 - totalOptimizations * 1),
     documentation: 80,
     duplication: 90,
     testCoverage: 75,

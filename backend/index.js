@@ -475,7 +475,7 @@ function cleanupTimers() {
 
   function validatePrompt(prompt) {
     if (!prompt) return '';
-    const maxLen = parseInt(process.env.MAX_SYSTEM_PROMPT_LENGTH) || 2000;
+    const maxLen = parseInt(process.env.MAX_SYSTEM_PROMPT_LENGTH, 10) || 2000;
     const normalized = String(prompt)
       .normalize('NFKC')
       .replace(/[\u200B-\u200D\uFEFF]/g, '')
@@ -533,7 +533,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
   const parsed = parseRepoUrl(repoUrl);
   const repoName = parsed.repo.replace(/[^a-zA-Z0-9_-]/g, '');
   const owner = parsed.owner;
-  const maxRepoSizeMB = parseInt(process.env.MAX_REPO_SIZE_MB) || 100;
+  const maxRepoSizeMB = parseInt(process.env.MAX_REPO_SIZE_MB, 10) || 100;
   const maxSizeBytes = maxRepoSizeMB * 1024 * 1024;
 
   // Pre-clone size check via GitHub API to prevent disk exhaustion
@@ -562,7 +562,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
 
   // Clone repo using simple-git to prevent shell injection and handle timeouts
   try {
-    const cloneTimeout = parseInt(process.env.GIT_CLONE_TIMEOUT) || 120000;
+    const cloneTimeout = parseInt(process.env.GIT_CLONE_TIMEOUT, 10) || 120000;
     const git = simpleGit({ timeout: { block: cloneTimeout } });
     await git.clone(repoUrl, clonePath, ['--depth', '1', '--single-branch', `--filter=blob:limit=${maxRepoSizeMB}m`]);
 

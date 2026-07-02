@@ -266,8 +266,11 @@ app.post('/api/session', requireApiKey, (req, res) => {
 
 // Logout endpoint — clears session and CSRF token
 app.post('/api/logout', requireApiKey, (req, res) => {
-  csrfTokenStore.clear();
-  csrfGraceTokenStore.clear();
+  const cookieToken = req.cookies?.[CSRF_COOKIE_NAME];
+  if (cookieToken) {
+    csrfTokenStore.delete(cookieToken);
+    csrfGraceTokenStore.delete(cookieToken);
+  }
   res.clearCookie(CSRF_COOKIE_NAME, { path: '/' });
   res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
   return res.json({ success: true, message: 'Logged out successfully.' });

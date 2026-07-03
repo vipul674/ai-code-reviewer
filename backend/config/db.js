@@ -18,22 +18,31 @@ export async function connectDatabase() {
   })
     .then((conn) => {
       isConnected = true;
-      console.log('✅ Connected to MongoDB via config/db.js');
+      displayStartupBanner(true);
       return conn;
     })
     .catch((err) => {
       isConnected = false;
       connectionPromise = null;
-      console.warn('⚠️ MongoDB connection failed:', err.message);
       if (process.env.NODE_ENV === 'production') {
         console.error('❌ Cannot start in production without database connection');
         process.exit(1);
       }
-      console.warn('⚠️ Running without database persistence');
+      console.warn('⚠️ MongoDB connection failed:', err.message);
+      displayStartupBanner(false);
       return null;
     });
 
   return connectionPromise;
+}
+
+function displayStartupBanner(connected) {
+  const border = '='.repeat(60);
+  if (connected) {
+    console.log(`\n${border}\n  MongoDB connected - Analytics and Sessions enabled\n${border}\n`);
+  } else {
+    console.warn(`\n${border}\n  MongoDB NOT connected - Running in DEGRADED mode\n  Analytics will not be persisted across restarts.\n  Set MONGODB_URI in your environment to enable persistence.\n${border}\n`);
+  }
 }
 
 export function isDatabaseConnected() {

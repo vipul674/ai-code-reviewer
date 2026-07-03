@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useDebounce } from '../hooks/useDebounce';
 import { useStore, ChatMessage } from '../store/useStore';
 import SettingsModal from "../components/SettingsModal";
+import DashboardFooter from "../components/DashboardFooter";
+import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import { MetricsChart } from '../components/MetricsChart';
 import { VulnerabilitiesBarChart } from '../components/VulnerabilitiesBarChart';
 import MarkdownErrorBoundary from '../components/MarkdownErrorBoundary';
@@ -4454,88 +4456,9 @@ export default function Dashboard() {
       {showSettings && (
         <SettingsModal onClose={() => setShowSettings(false)} />
       )}
-      {showShortcutsHelp && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.55)",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            zIndex: 9999,
-          }}
-          onClick={() => setShowShortcutsHelp(false)}
-        >
-          <div
-            className="glass-panel"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "400px",
-              padding: "24px",
-              borderRadius: "12px",
-              background: "var(--panel-bg)",
-              color: "var(--text-color)",
-              border: "1px solid var(--border-color)",
-            }}
-          >
-            <h2 style={{ marginTop: 0 }}>Keyboard Shortcuts</h2>
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, fontSize: "14px" }}>
-              <li style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
-                <span>Focus Search</span>
-                <kbd style={{ background: "#374151", padding: "2px 6px", borderRadius: "4px" }}>Ctrl + K</kbd>
-              </li>
-              <li style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
-                <span>Close Modals / Blur Input</span>
-                <kbd style={{ background: "#374151", padding: "2px 6px", borderRadius: "4px" }}>Esc</kbd>
-              </li>
-              <li style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
-                <span>Show Shortcuts</span>
-                <kbd style={{ background: "#374151", padding: "2px 6px", borderRadius: "4px" }}>?</kbd>
-              </li>
-            </ul>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "24px" }}>
-              <button
-                onClick={() => setShowShortcutsHelp(false)}
-                style={{
-                  background: "#2563eb",
-                  color: "#fff",
-                  border: "none",
-                  padding: "8px 16px",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                }}
-              >
-                Got it
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {showShortcutsHelp && <KeyboardShortcutsHelp onClose={() => setShowShortcutsHelp(false)} />}
 
-      {/* 🚀 Sleek Footer */}
-      <footer
-        style={{
-          marginTop: "auto",
-          background: "rgba(15, 23, 42, 0.4)",
-          padding: "12px 24px",
-          borderTop: "1px solid rgba(255,255,255,0.05)",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          fontSize: "11px",
-          color: "#9ca3af",
-        }}
-      >
-        <span>
-          RepoSage AI © 2026. Made with 💜 for GirlScript Summer of Code
-          (GSSoC).
-        </span>
-        <div style={{ display: "flex", gap: "16px" }}>
-          <span>Mentors: Kalyan Reddy Bhoompally</span>
-          <span>Status: Production MVP Ready</span>
-        </div>
-      </footer>
+      <DashboardFooter />
     </div>
   );
 }

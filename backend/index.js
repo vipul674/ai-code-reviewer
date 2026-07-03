@@ -1631,7 +1631,7 @@ app.post('/api/reports/html', requireApiKey, exportLimiter, (req, res) => {
     </html>
   `;
   
-  res.setHeader('Content-Type', 'text/html');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${safeRepoName}_AUDIT_REPORT.html"`);
   return res.send(html);
 });

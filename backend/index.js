@@ -369,6 +369,40 @@ const DEPENDENCY_REGISTRIES = {
     }
     return results;
   },
+  'requirements.txt': async (filePath) => {
+    const content = await fs.promises.readFile(filePath, 'utf-8');
+    const results = [];
+    const lines = content.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+    const maxCheck = 10;
+    let checked = 0;
+    for (const line of lines) {
+      if (checked >= maxCheck) {
+        results.push({ name: line.trim(), currentVersion: 'unknown', latestVersion: 'unknown', risk: 'Unknown', deprecated: false, vulnerable: false, recommendation: 'Manual review recommended.' });
+        continue;
+      }
+      const match = line.trim().match(/^([a-zA-Z0-9_.-]+)([><=!~]+.+)?$/);
+      if (match) {
+        const pkgName = match[1];
+        const spec = match[2] || 'latest';
+        try {
+          const resp = await fetch(`https://pypi.org/pypi/${encodeURIComponent(pkgName)}/json`, { signal: AbortSignal.timeout(5000) });
+          if (resp.ok) {
+            const data = await resp.json();
+            const latest = data.info?.version || 'unknown';
+            const current = spec.replace(/[><=!~]+/, '') || 'unknown';
+            const isOutdated = latest !== 'unknown' && current !== 'unknown' && current !== latest;
+            results.push({ name: pkgName, currentVersion: current, latestVersion: latest, risk: isOutdated ? 'Medium' : 'Low', deprecated: false, vulnerable: false, recommendation: isOutdated ? `Update from ${current} to ${latest}.` : 'Up to date.' });
+          } else {
+            results.push({ name: pkgName, currentVersion: spec || 'unknown', latestVersion: 'unknown', risk: 'Unknown', deprecated: false, vulnerable: false, recommendation: 'Could not check PyPI.' });
+          }
+        } catch {
+          results.push({ name: pkgName, currentVersion: spec || 'unknown', latestVersion: 'unknown', risk: 'Unknown', deprecated: false, vulnerable: false, recommendation: 'Could not check PyPI.' });
+        }
+      }
+      checked++;
+    }
+    return results;
+  },
 };
 async function generateDependencyReport(clonePath) {
   const deps = [];

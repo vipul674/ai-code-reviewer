@@ -3554,7 +3554,7 @@ export default function Dashboard() {
                                     </div>
                                   </div>
                                 </div>
-                                <MetricsChart reviewId={sessionId} />
+                                <MetricsChart sessionId={sessionId} />
                               </div>
                             );
                           })()

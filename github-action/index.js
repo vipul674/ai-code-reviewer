@@ -62,6 +62,15 @@ async function run() {
     const groqApiKey = core.getInput('groq-api-key', { required: true });
     const excludePathsInput = core.getInput('exclude-paths') || '';
     const includeExtensionsInput = core.getInput('include-extensions') || '';
+    if (includeExtensionsInput) {
+      const rawExtensions = includeExtensionsInput.split(',').map(e => e.trim()).filter(Boolean);
+      for (const ext of rawExtensions) {
+        if (!/^\.[a-zA-Z0-9]+$/.test(ext)) {
+          core.setFailed(`Invalid file extension: "${ext}". Extensions must start with a dot and contain only alphanumeric characters (e.g., .js, .tsx).`);
+          return;
+        }
+      }
+    }
     const maxTokens = parseInt(core.getInput('max-tokens') || '4096', 10);
     const autoApprove = core.getInput('auto-approve')?.toLowerCase() === 'true';
 

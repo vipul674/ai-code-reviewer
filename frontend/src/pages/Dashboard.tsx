@@ -37,6 +37,7 @@ import {
 import { handleMarkdownExport, handleHtmlExport } from "../utils/exportUtils";
 import mermaid from "mermaid";
 import { sanitizeMermaidOutput } from "../utils/sanitize";
+// Path resolves correctly: pages/ -> ../utils/api -> frontend/src/utils/api
 import { apiFetch } from "../utils/api";
 
 // Initialize Mermaid outside the component to avoid multiple initializations

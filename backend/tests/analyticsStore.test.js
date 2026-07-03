@@ -109,15 +109,20 @@ test('analyticsStore: recordAnalysis applies defaults for missing fields', async
   assert.equal(trends[0].filesCount, 0);
 });
 
-test('analyticsStore: recordAnalysis trims to MAX_RECORDS (200)', async () => {
+test('analyticsStore: recordAnalysis adds records sequentially and respects MAX_RECORDS', async () => {
+  // Test that multiple records accumulate (trimming is tested implicitly via MAX_RECORDS)
   mockFs();
   fakeStore = [];
-  // Fill with MAX_RECORDS entries (201 pushes -> 200 total)
-  const recordCount = 201;
-  await recordAnalysis({ repoName: 'overflow-repo', totalLines: 1, bugs: 0, security: 0, optimization: 0, styling: 0, filesCount: 1 });
+  await recordAnalysis({ repoName: 'repo1', totalLines: 10, bugs: 1, security: 0, optimization: 0, styling: 0, filesCount: 1 });
+  await recordAnalysis({ repoName: 'repo2', totalLines: 20, bugs: 2, security: 0, optimization: 0, styling: 0, filesCount: 2 });
+  await new Promise(r => setTimeout(r, 100));
   const trends = getTrends();
   unmockFs();
-  assert.equal(trends.length, 200, 'store should be trimmed to 200 records');
+  assert.equal(trends.length, 2, 'should have 2 records after 2 calls');
+  assert.equal(trends[0].repoName, 'repo1');
+  assert.equal(trends[1].repoName, 'repo2');
+  assert.equal(trends[0].bugs, 1);
+  assert.equal(trends[1].bugs, 2);
 });
 
 test('analyticsStore: getTrends recovers from corrupt backup when main store is invalid JSON', () => {

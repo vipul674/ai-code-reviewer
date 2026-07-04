@@ -6,7 +6,7 @@ export function estimateSessionSize(files) {
   let size = 200;
   size += 100;
   for (const file of files) {
-    size += 50 + Buffer.byteLength(file.name, 'utf8') + Buffer.byteLength(file.content, 'utf8');
+    size += 50 + Math.round(1.5 * (Buffer.byteLength(file.name, 'utf8') + Buffer.byteLength(file.content, 'utf8')));
     if (size > MAX_SESSION_SIZE_BYTES) return size;
   }
   return size;

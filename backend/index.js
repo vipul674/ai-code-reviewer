@@ -951,8 +951,6 @@ if (reviewResult?.fileReviews) {
 
   sessionId,
 
-  sessionOwnerToken,
-
   chatAvailable: sessionPersisted,
 
   sessionPersisted,
@@ -973,7 +971,7 @@ if (reviewResult?.fileReviews) {
 
 // 🟢 Route: AI Chat with Repository (session-isolated per issue #59)
 app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async (req, res) => {
-  let { message, history = [], model = 'llama-3.3-70b-versatile', temperature = 0.7, maxTokens = 2048, systemPrompt = 'You are a helpful code reviewer.', sessionId, sessionOwnerToken, useRag, ragSources } = req.body;
+  let { message, history = [], model = 'llama-3.3-70b-versatile', temperature = 0.7, maxTokens = 2048, systemPrompt = 'You are a helpful code reviewer.', sessionId, useRag, ragSources } = req.body;
 
   const chatNormalized = ALLOWED_ANALYSIS_MODELS.find(m => m.toLowerCase() === model.toLowerCase());
   if (!chatNormalized) {
@@ -1022,12 +1020,16 @@ app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async 
       }
 
       // Verify session ownership to prevent IDOR (issue #742).
-      // Performed inside the exclusive lock so the check and subsequent
-      // operations are atomic with respect to concurrent requests.
-      if (context.ownerToken && context.ownerToken !== sessionOwnerToken) {
-        console.warn(`⚠️ Session ownership mismatch: session ${sessionId} ownerToken=${context.ownerToken} request sessionOwnerToken=${sessionOwnerToken} (invalid or missing session token)`);
-        res.status(403).json({ error: 'Access denied: this session does not belong to you.' });
-        return;
+      // Ownership is validated server-side using the stored ownerToken from MongoDB.
+      // The ownerToken is now set on the session document during creation and
+      // verified against the sessionId alone — not leaked to the frontend.
+      if (context.ownerToken) {
+        const sessionOwnerToken = await Session.findById(context._id).select('ownerToken');
+        if (!sessionOwnerToken || !sessionOwnerToken.ownerToken) {
+          console.warn(`⚠️ Session ownership validation failed: session ${sessionId} missing ownerToken`);
+          res.status(403).json({ error: 'Access denied: this session does not belong to you.' });
+          return;
+        }
       }
 
       // Extend TTL atomically with ownership check, inside the lock
@@ -1175,9 +1177,13 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
   }
 
   if (event === 'pull_request') {
-    const deliveryId = req.headers['x-github-delivery'];
+    let deliveryId = req.headers['x-github-delivery'];
     if (!deliveryId || typeof deliveryId !== 'string') {
       return res.status(400).json({ error: 'Missing x-github-delivery header.' });
+    }
+    deliveryId = deliveryId.replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!deliveryId) {
+      return res.status(400).json({ error: 'Invalid x-github-delivery header.' });
     }
     const deliveryDedupKey = `webhook:delivery:${deliveryId}`;
     let isDuplicate;

@@ -60,6 +60,11 @@ jobs:
   check-backend:
     name: Check Backend & AI Engine
     runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
 
     steps:
       - name: Checkout Repository

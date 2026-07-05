@@ -192,7 +192,7 @@ setInterval(() => {
   for (const [token, expiry] of csrfGraceTokenStore) {
     if (now > expiry) csrfGraceTokenStore.delete(token);
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 function generateCsrfToken() {
   const token = crypto.randomBytes(32).toString('hex');
@@ -463,6 +463,7 @@ const EXCLUSIVE_LOCK_TTL = 30 * 60 * 1000;
 const exclusiveLockCleanupTimer = setInterval(() => {
   reviewQueue.cleanupStaleExclusiveLocks(EXCLUSIVE_LOCK_TTL);
 }, EXCLUSIVE_LOCK_CLEANUP_INTERVAL);
+exclusiveLockCleanupTimer.unref();
 
 function cleanupTimers() {
   clearInterval(exclusiveLockCleanupTimer);

@@ -1198,7 +1198,7 @@ setInterval(() => {
       repoRequestCounts.delete(key);
     }
   }
-}, 60 * 1000);
+}, 60 * 1000).unref();
 
 const webhookLimiter = rateLimit({
   windowMs: 60 * 1000,

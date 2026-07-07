@@ -1166,10 +1166,10 @@ app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async 
           res.json(data);
         } else {
           const errText = await aiResponse.text();
-          throw new Error(errText || 'AI engine chat request failed');
+          throw new Error(sanitizeErrorMessage(errText) || 'AI engine chat request failed');
         }
       } catch (err) {
-        console.error('❌ Chat API Error:', err.message);
+        console.error('❌ Chat API Error:', sanitizeErrorMessage(err.message));
 
         // Simple local fallback if Python FastAPI server is offline
         const responseMessage = `[Fallback Response] I see you are asking about: "${message}". Currently, the FastAPI AI Engine is offline, so I cannot analyze the full codebase for your query. Please make sure the AI Engine service is running on port 8000.`;
@@ -1206,10 +1206,10 @@ app.post('/api/rag/query', requireApiKey, async (req, res) => {
       return res.json(data);
     } else {
       const errText = await aiResponse.text();
-      throw new Error(errText || 'AI engine RAG query failed');
+      throw new Error(sanitizeErrorMessage(errText) || 'AI engine RAG query failed');
     }
   } catch (err) {
-    console.error('❌ RAG Query API Error:', err.message);
+    console.error('❌ RAG Query API Error:', sanitizeErrorMessage(err.message));
     return res.status(502).json({ error: 'RAG query failed: AI Engine unavailable.' });
   }
 });
@@ -2166,8 +2166,32 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Sanitize error messages that may contain API keys or sensitive tokens.
+const SANITIZE_PATTERNS = [
+  { pattern: /(?:sk-|gsk_|api[_-]?key|apikey|token|secret|password|auth)[\s=:"']+[^\s"']{8,}/gi, replacement: '***' },
+  { pattern: /[A-Za-z0-9_-]{32,}/g, replacement: '***' },
+];
+
+function sanitizeErrorMessage(msg) {
+  if (!msg || typeof msg !== 'string') return msg;
+  let sanitized = msg;
+  for (const { pattern, replacement } of SANITIZE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, replacement);
+  }
+  try {
+    const decoded = decodeURIComponent(sanitized);
+    if (decoded !== sanitized) {
+      for (const { pattern, replacement } of SANITIZE_PATTERNS) {
+        sanitized = sanitized.replace(pattern, replacement);
+      }
+    }
+  } catch { /* keep as-is */ }
+  return sanitized;
+}
+
 const errorHandler = (err, req, res, next) => {
-  console.error('Unhandled error in request:', err.message);
+  const safeMessage = sanitizeErrorMessage(err.message);
+  console.error('Unhandled error in request:', safeMessage);
   if (err.stack) {
     console.error(err.stack);
   }
@@ -2176,7 +2200,7 @@ const errorHandler = (err, req, res, next) => {
   }
   const statusCode = err.statusCode || err.status || 500;
   res.status(statusCode).json({
-    error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
+    error: process.env.NODE_ENV === 'production' ? 'Internal server error' : safeMessage,
   });
 };
 app.use(errorHandler);

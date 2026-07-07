@@ -5,6 +5,7 @@ import time
 import asyncio
 import uuid
 import unicodedata
+import urllib.parse
 from collections import OrderedDict
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -83,11 +84,17 @@ def sanitize_file_content(content: str) -> str:
     wrapped = "--- BEGIN FILE CONTENT (read-only code context) ---\n" + wrapped + "\n--- END FILE CONTENT ---"
     return wrapped
 
-def _redact_key(text: str, key: str) -> str:
+def sanitize_error(text: str, key: str) -> str:
     if not text or not key:
         return text
+    # Redact plaintext key
     escaped = re.escape(key)
     text = re.sub(escaped, "***", text)
+    # Redact URL-encoded key
+    url_encoded = urllib.parse.quote(key, safe='')
+    if url_encoded != key:
+        text = re.sub(re.escape(url_encoded), "***", text)
+    # Redact partial key matches (truncated representations)
     for trunc_suffix in ["...", "…", " (truncated)"]:
         truncated = re.escape(key[:len(key) // 2] + trunc_suffix)
         text = re.sub(truncated, "***", text)
@@ -255,6 +262,20 @@ async def _call_groq_with_timeout(**kwargs):
 
 app = FastAPI(title="RepoSage AI Engine", description="FastAPI microservice for repository analysis and documentation generation")
 
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    key = os.getenv("GROQ_API_KEY") or ""
+    sanitized = sanitize_error(str(exc), key)
+    import traceback
+    print(f"Unhandled exception: {sanitized}")
+    print(traceback.format_exc())
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
+
+
 def verify_api_key(x_api_key: str = Header(None)):
     expected_key = os.getenv("API_KEY")
     if expected_key and x_api_key != expected_key:
@@ -357,7 +378,7 @@ if api_key:
         groq_client = Groq(api_key=api_key)
         print("🟢 Groq Client successfully initialized in FastAPI AI Engine!")
     except Exception as e:
-        sanitized_error = _redact_key(str(e), api_key)
+        sanitized_error = sanitize_error(str(e), api_key)
         print(f"⚠️ Error initializing Groq client: {sanitized_error}")
 else:
     print("⚠️ GROQ_API_KEY not found in environment. Running in sandbox mode.")
@@ -618,10 +639,10 @@ You must obey the JSON output format above."""
                         combined_result["fileReviews"][file_path] = review
 
         except Exception as e:
-            print(f"❌ Groq API Call Failed for batch {idx + 1}: {_redact_key(str(e), api_key)}")
+            print(f"❌ Groq API Call Failed for batch {idx + 1}: {sanitize_error(str(e), api_key)}")
             # If the first batch fails, we should probably fail the whole request since README/Mermaid are missing
             if is_first_batch:
-                raise HTTPException(status_code=500, detail=f"Groq API reasoning failed on first batch: {_redact_key(str(e), api_key)}")
+                raise HTTPException(status_code=500, detail=f"Groq API reasoning failed on first batch: {sanitize_error(str(e), api_key)}")
             else:
                 print(f"⚠️ Skipping failed batch {idx + 1} and continuing...")
                 continue
@@ -791,8 +812,8 @@ Guidelines:
         return result
         
     except Exception as e:
-        print(f"❌ Groq Chat API Call Failed: {_redact_key(str(e), api_key)}")
-        raise HTTPException(status_code=500, detail=f"Groq API chat failed: {_redact_key(str(e), api_key)}")
+        print(f"❌ Groq Chat API Call Failed: {sanitize_error(str(e), api_key)}")
+        raise HTTPException(status_code=500, detail=f"Groq API chat failed: {sanitize_error(str(e), api_key)}")
 
 class DiffChange(BaseModel):
     line: int
@@ -912,7 +933,7 @@ If no issues are found, reply with: {{ "reviews": [] }}"""
                             "body": f"\n{sanitize_ai_output(comment_body)}"
                         })
         except Exception as e:
-            print(f"⚠️ Error reviewing file {file.path} on Groq: {_redact_key(str(e), api_key)}")
+            print(f"⚠️ Error reviewing file {file.path} on Groq: {sanitize_error(str(e), api_key)}")
             
     return {"comments": comments}
 

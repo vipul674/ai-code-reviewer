@@ -23,6 +23,9 @@ export function isValidRepoUrl(url) {
   // Reject URLs with query parameters or fragments (not valid for clone)
   if (parsed.search || parsed.hash) return false;
 
+  // Reject URLs with consecutive slashes in the path
+  if (parsed.pathname.includes('//')) return false;
+
   // Path must be exactly /owner/repo with optional .git suffix or trailing slash
   const path = parsed.pathname.replace(/\/+$/, '').replace(/\.git$/, '');
   const segments = path.split('/').filter(Boolean);

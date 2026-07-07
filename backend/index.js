@@ -228,10 +228,26 @@ function validateCsrfToken(token) {
 }
 
 // CSRF validation middleware for state-changing methods
-function csrfProtection(req, res, next) {
+async function csrfProtection(req, res, next) {
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
     const headerToken = req.headers['x-csrf-token'];
     const cookieToken = req.cookies?.[CSRF_COOKIE_NAME];
+    const sessionId = req.body?.sessionId;
+
+    // For session-scoped endpoints, additionally validate against stored CSRF token
+    if (sessionId) {
+      try {
+        const session = await Session.findOne({ sessionId }).select('csrfToken').lean();
+        if (session && session.csrfToken) {
+          const storedBuf = Buffer.from(String(session.csrfToken));
+          const headerBuf = Buffer.from(String(headerToken || ''));
+          if (storedBuf.length === headerBuf.length && crypto.timingSafeEqual(storedBuf, headerBuf)) {
+            return next();
+          }
+        }
+      } catch { /* fall through to normal validation */ }
+    }
+
     if (!headerToken || !cookieToken) {
       // Allow session creation and CSRF token endpoints to function
       if (req.path.endsWith('/api/session') || req.path.endsWith('/api/csrf-token')) {
@@ -737,6 +753,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
       if (estimatedSize <= MAX_SESSION_DOC_SIZE) {
         sessionId = crypto.randomUUID();
         sessionOwnerToken = crypto.randomUUID();
+        const csrfToken = generateCsrfToken();
         try {
           await Session.create({
             sessionId,
@@ -745,6 +762,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
             files: storedFiles,
             lastAccessedAt: new Date(),
             ownerToken: sessionOwnerToken,
+            csrfToken,
           });
           sessionPersisted = true;
         } catch (sessionErr) {
@@ -947,8 +965,18 @@ if (reviewResult?.fileReviews) {
   });
 }
       
-      // 7. Return result
-      return res.json({
+      // 7. Set CSRF cookie if session was persisted
+      if (sessionPersisted) {
+        res.cookie(CSRF_COOKIE_NAME, csrfToken, {
+          httpOnly: true,
+          sameSite: 'strict',
+          path: '/',
+          secure: process.env.NODE_ENV === 'production',
+        });
+      }
+
+      // 8. Return result
+      return res.json({ ...(sessionPersisted ? { csrfToken } : {}),
   success: true,
 
   repoName,

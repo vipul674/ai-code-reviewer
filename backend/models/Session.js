@@ -29,6 +29,10 @@ const sessionSchema = new mongoose.Schema({
     unique: true,
     index: true,
   },
+  csrfToken: {
+    type: String,
+    default: null,
+  },
   repoUrl: {
     type: String,
     required: true,

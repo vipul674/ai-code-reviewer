@@ -638,8 +638,11 @@ You must obey the JSON output format above."""
             
             if "fileReviews" in batch_result:
                 for file_path, review in batch_result["fileReviews"].items():
-                    # Sanitize review items
+                    # Sanitize review items, and drop any finding whose type
+                    # (used as the rule name) is configured `off` in
+                    # .codereviewer.yml.
                     for category in ["bugs", "security", "optimization", "styling"]:
+                        kept_items = []
                         for item in review.get(category, []):
                             if "suggestion" in item:
                                 item["suggestion"] = sanitize_ai_output(item["suggestion"])

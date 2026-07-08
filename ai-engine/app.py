@@ -38,6 +38,7 @@ if not loaded:
 
 MAX_FILE_CHARS_PER_FILE = int(os.getenv("MAX_FILE_CHARS_PER_FILE", "1500"))
 MAX_CHAT_FILES = int(os.getenv("MAX_CHAT_FILES", "20"))
+MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", "10000"))
 # Maximum seconds to wait for a single LLM API response before returning 504 (#786)
 LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 
@@ -688,6 +689,8 @@ async def chat_with_repository(request: ChatRequest):
     
     files = request.files
     message = request.message
+    if len(message) > MAX_MESSAGE_LENGTH:
+        raise HTTPException(status_code=413, detail=f"Message too long. Maximum length is {MAX_MESSAGE_LENGTH} characters.")
     history = request.history
     custom_system_prompt = await asyncio.to_thread(validate_system_prompt, request.systemPrompt or "")
     

@@ -137,6 +137,19 @@ function MermaidViewer({ chart, repoName }: MermaidViewerProps) {
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const [theme, setTheme] = useState(() =>
+    document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark"
+  );
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      const current = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+      setTheme(prev => prev !== current ? current : prev);
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     if (!chart) return;
@@ -168,7 +181,7 @@ function MermaidViewer({ chart, repoName }: MermaidViewerProps) {
         try {
           mermaid.initialize({
             startOnLoad: false,
-            theme: document.documentElement.getAttribute("data-theme") === "light" ? "base" : "dark",
+            theme: theme === "light" ? "base" : "dark",
             securityLevel: "strict",
             themeVariables: {
               background: "#0f172a",
@@ -198,7 +211,7 @@ function MermaidViewer({ chart, repoName }: MermaidViewerProps) {
 
     renderChart();
     return () => { cancelled = true; };
-  }, [chart]);
+  }, [chart, theme]);
 
   if (!chart) return null;
 

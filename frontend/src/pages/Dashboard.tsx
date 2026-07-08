@@ -45,7 +45,6 @@ const LazyMetricsChart = React.lazy(() =>
   import('../components/MetricsChart').then((module) => ({ default: module.MetricsChart }))
 );
 
-let mermaidInitialized = false;
 
 
 const getSavedAiSettings = () => {
@@ -166,25 +165,22 @@ function MermaidViewer({ chart, repoName }: MermaidViewerProps) {
         const mermaidModule = await import("mermaid");
         const mermaid = mermaidModule.default;
 
-        if (!mermaidInitialized) {
-          try {
-            mermaid.initialize({
-              startOnLoad: false,
-              theme: window.matchMedia("(prefers-color-scheme: light)").matches ? "base" : "dark",
-              securityLevel: "strict",
-              themeVariables: {
-                background: "#0f172a",
-                primaryColor: "#3b82f6",
-                primaryTextColor: "#e5e7eb",
-                lineColor: "#c084fc",
-                nodeBorder: "#3b82f6",
-                mainBkg: "#1e293b",
-              },
-            });
-            mermaidInitialized = true;
-          } catch (e) {
-            console.error("Failed to initialize Mermaid:", e);
-          }
+        try {
+          mermaid.initialize({
+            startOnLoad: false,
+            theme: document.documentElement.getAttribute("data-theme") === "light" ? "base" : "dark",
+            securityLevel: "strict",
+            themeVariables: {
+              background: "#0f172a",
+              primaryColor: "#3b82f6",
+              primaryTextColor: "#e5e7eb",
+              lineColor: "#c084fc",
+              nodeBorder: "#3b82f6",
+              mainBkg: "#1e293b",
+            },
+          });
+        } catch (e) {
+          console.error("Failed to initialize Mermaid:", e);
         }
 
         const { svg: renderedSvg } = await mermaid.render(uniqueId, cleanChart);
@@ -864,15 +860,16 @@ export default function Dashboard() {
       const response = await apiFetch("/api/chat", {
         method: "POST",
         body: JSON.stringify({
-          message: userMessage,
-          history: truncateChatHistory(chatHistory),
-          model: selectedModel,
-          temperature: chatAiSettings.temperature ?? 0.4,
-          maxTokens: chatAiSettings.maxTokens ?? 2048,
-          sessionId,
-          useRag,
-          systemPrompt: chatAiSettings.systemPrompt ?? "",
-        }),
+            message: userMessage,
+            history: truncateChatHistory(chatHistory),
+            model: selectedModel,
+            temperature: chatAiSettings.temperature ?? 0.4,
+            maxTokens: chatAiSettings.maxTokens ?? 2048,
+            sessionId,
+            sessionOwnerToken: localStorage.getItem("sessionOwnerToken") || "",
+            useRag,
+            systemPrompt: chatAiSettings.systemPrompt ?? "",
+          }),
       });
 
       if (!response.ok) {
@@ -1130,9 +1127,10 @@ export default function Dashboard() {
     element.href = URL.createObjectURL(file);
     element.download = "GENERATED_README.md";
     document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-  };
+      element.click();
+      document.body.removeChild(element);
+      URL.revokeObjectURL(element.href);
+    };
 
   const chatInputEmpty = !chatInput.trim();
 

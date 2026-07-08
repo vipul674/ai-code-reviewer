@@ -82,7 +82,7 @@ services:
       dockerfile: Dockerfile
     container_name: reposage-frontend
     ports:
-      - "3000:3000"
+      - "3000:80"
     volumes:
       - ./frontend:/usr/src/app
       - /usr/src/app/node_modules

@@ -1355,15 +1355,24 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
 
       const shaKey = `${sanitizeRedisKey(owner)}/${sanitizeRedisKey(repo)}/#${sanitizeRedisKey(String(pullNumber))}`;
       const shaDedupKey = `webhook:sha:${shaKey}`;
-      let shaAlreadyReviewed;
       if (redisClient) {
-        shaAlreadyReviewed = await redisClient.sismember(shaDedupKey, headSha);
+        const added = await redisClient.sadd(shaDedupKey, headSha);
+        if (added === 0) {
+          console.log(`⏭️ Already reviewed commit ${headSha.substring(0,7)} for PR #${pullNumber}`);
+          return res.json({ success: true, message: 'Webhook received (duplicate SHA skipped).' });
+        }
+        await redisClient.expire(shaDedupKey, DELIVERY_REDIS_TTL);
       } else {
-        shaAlreadyReviewed = shaDedupMemoryMap.has(`${shaDedupKey}:${headSha}`) ? 1 : 0;
-      }
-      if (shaAlreadyReviewed) {
-        console.log(`⏭️ Already reviewed commit ${headSha.substring(0,7)} for PR #${pullNumber}`);
-        return res.json({ success: true, message: 'Webhook received (duplicate SHA skipped).' });
+        const mapKey = `${shaDedupKey}:${headSha}`;
+        if (shaDedupMemoryMap.has(mapKey)) {
+          console.log(`⏭️ Already reviewed commit ${headSha.substring(0,7)} for PR #${pullNumber}`);
+          return res.json({ success: true, message: 'Webhook received (duplicate SHA skipped).' });
+        }
+        if (shaDedupMemoryMap.size >= SHA_DEDUP_MAX_SIZE) {
+          const oldestKey = shaDedupMemoryMap.keys().next().value;
+          if (oldestKey !== undefined) shaDedupMemoryMap.delete(oldestKey);
+        }
+        shaDedupMemoryMap.set(mapKey, Date.now());
       }
       
       console.log(`📡 GitHub Webhook received: PR #${pullNumber} ${action} (${headSha.substring(0,7)}) in ${owner}/${repo}`);
@@ -1411,20 +1420,8 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
         }
       });
       if (enqueuePromise) {
-        if (redisClient) {
-          await redisClient.sadd(shaDedupKey, headSha);
-          await redisClient.expire(shaDedupKey, DELIVERY_REDIS_TTL);
-        } else {
-          const mapKey = `${shaDedupKey}:${headSha}`;
-          // Enforce max size cap with oldest-entry eviction
-          if (shaDedupMemoryMap.size >= SHA_DEDUP_MAX_SIZE) {
-            const oldestKey = shaDedupMemoryMap.keys().next().value;
-            if (oldestKey !== undefined) {
-              shaDedupMemoryMap.delete(oldestKey);
-            }
-          }
-          shaDedupMemoryMap.set(mapKey, Date.now());
-        }
+        // SHA already added atomically above; no duplicate sadd needed.
+        // Expiry was set at insert time for Redis; nothing extra for in-memory.
       } else {
         return res.status(429).json({ error: 'Review queue full. Try again later.' });
       }

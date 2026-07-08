@@ -4,9 +4,7 @@ export function sanitizeFileContent(content) {
   if (typeof content !== 'string') return '';
   let sanitized = content;
   DANGEROUS_PHRASES.forEach((pattern, i) => {
-    const escapedPattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const flexiblePattern = escapedPattern.replace(/\\ /g, '\\s+').replace(/ /g, '\\s+');
-    const regex = new RegExp(flexiblePattern, 'gi');
+    const regex = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
     sanitized = sanitized.replace(regex, `[INSTRUCTION_${i}_NEUTRALIZED]`);
   });
   const lines = sanitized.split('\n');
@@ -19,9 +17,7 @@ export function scanFileContentForWarnings(content) {
   if (typeof content !== 'string') return [];
   const warnings = [];
   for (const pattern of DANGEROUS_PHRASES) {
-    const escapedPattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const flexiblePattern = escapedPattern.replace(/\\ /g, '\\s+').replace(/ /g, '\\s+');
-    const regex = new RegExp(flexiblePattern, 'gi');
+    const regex = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
     if (regex.test(content)) {
       warnings.push(`File contains potentially malicious content matching: "${pattern}"`);
     }

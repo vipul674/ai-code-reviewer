@@ -700,23 +700,10 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
             const resData = await aiResponse.json();
             resData._mock = false;
             return resData;
-          } else if (aiResponse.status === 401 || aiResponse.status === 403) {
-            const errBody = await aiResponse.text();
-            const err = new Error(`AI Engine Authentication Failed: ${errBody}`);
-            err.status = aiResponse.status;
-            throw err;
-          } else if (aiResponse.status === 422) {
-            const errBody = await aiResponse.text();
-            const err = new Error(`AI Engine Validation Failed: ${errBody}`);
-            err.status = aiResponse.status;
-            throw err;
           } else {
-            throw new Error(`AI engine responded with error: ${aiResponse.status}`);
+            throw new Error('AI engine responded with error');
           }
         } catch (err) {
-          if (err.status === 401 || err.status === 403 || err.status === 422) {
-            throw err; // Do not fallback to mock for auth/validation errors
-          }
           console.warn('⚠️ FastAPI engine not running, falling back to local Express review handler');
           const mockRes = mockAIReview(files, model);
           mockRes._mock = true;
@@ -1368,16 +1355,20 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
 
       const shaKey = `${sanitizeRedisKey(owner)}/${sanitizeRedisKey(repo)}/#${sanitizeRedisKey(String(pullNumber))}`;
       const shaDedupKey = `webhook:sha:${shaKey}`;
-      let isNewSha;
+      let shaAlreadyReviewed;
       if (redisClient) {
-        isNewSha = await redisClient.sadd(shaDedupKey, headSha);
-        if (isNewSha === 1) {
+        const added = await redisClient.sadd(shaDedupKey, headSha);
+        if (!added) {
+          shaAlreadyReviewed = 1;
+        } else {
+          shaAlreadyReviewed = 0;
           await redisClient.expire(shaDedupKey, DELIVERY_REDIS_TTL);
         }
       } else {
         const mapKey = `${shaDedupKey}:${headSha}`;
-        isNewSha = !shaDedupMemoryMap.has(mapKey) ? 1 : 0;
-        if (isNewSha) {
+        shaAlreadyReviewed = shaDedupMemoryMap.has(mapKey) ? 1 : 0;
+        if (!shaAlreadyReviewed) {
+          // Enforce max size cap with oldest-entry eviction
           if (shaDedupMemoryMap.size >= SHA_DEDUP_MAX_SIZE) {
             const oldestKey = shaDedupMemoryMap.keys().next().value;
             if (oldestKey !== undefined) {
@@ -1387,7 +1378,7 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
           shaDedupMemoryMap.set(mapKey, Date.now());
         }
       }
-      if (!isNewSha) {
+      if (shaAlreadyReviewed) {
         console.log(`⏭️ Already reviewed commit ${headSha.substring(0,7)} for PR #${pullNumber}`);
         return res.json({ success: true, message: 'Webhook received (duplicate SHA skipped).' });
       }
@@ -1395,6 +1386,11 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
       console.log(`📡 GitHub Webhook received: PR #${pullNumber} ${action} (${headSha.substring(0,7)}) in ${owner}/${repo}`);
 
       if (reviewQueue._queues.size >= reviewQueue._maxQueues) {
+        if (redisClient) {
+          await redisClient.srem(shaDedupKey, headSha);
+        } else {
+          shaDedupMemoryMap.delete(`${shaDedupKey}:${headSha}`);
+        }
         return res.status(429).json({ error: 'Too many pending reviews. Try again later.' });
       }
 
@@ -1421,6 +1417,11 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
 
       if (currentCount > REPO_MAX_REQUESTS) {
         console.warn(`⚠️ Rate limit exceeded for repository ${repoKey}`);
+        if (redisClient) {
+          await redisClient.srem(shaDedupKey, headSha);
+        } else {
+          shaDedupMemoryMap.delete(`${shaDedupKey}:${headSha}`);
+        }
         return res.status(429).json({ error: 'Too many requests for this repository. Try again later.' });
       }
 
@@ -1436,9 +1437,7 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
           }
         }
       });
-      if (enqueuePromise) {
-        // Enqueued successfully; SHA already in set atomically.
-      } else {
+      if (!enqueuePromise) {
         // Revert dedup if enqueue failed synchronously
         if (redisClient) {
           await redisClient.srem(shaDedupKey, headSha);

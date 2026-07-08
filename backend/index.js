@@ -1,14 +1,15 @@
+import 'express-async-errors';
+import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import PDFDocument from 'pdfkit';
 import crypto from 'crypto';
-import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { Octokit } from '@octokit/rest';
-import { createFrontendSessionCookie, requireApiKey, SESSION_COOKIE_NAME, validateSessionSecret } from './utils/authMiddleware.js';
+import { createFrontendSessionCookie, requireApiKey, SESSION_COOKIE_NAME, validateSessionSecret, isValidUuid } from './utils/authMiddleware.js';
 import rateLimit from 'express-rate-limit';
 import RedisStore from 'rate-limit-redis';
 import Redis from 'ioredis';
@@ -16,6 +17,7 @@ import { scanSecrets, scanSecretsInChanges } from './utils/secretsScanner.js';
 import { recordAnalysis as recordFileAnalytics } from './utils/analyticsStore.js';
 import { loadIgnorePatterns, readFilesRecursively } from './utils/ignoreHelper.js';
 import { isValidRepoUrl, parseRepoUrl } from './utils/urlValidator.js';
+import { isValidGithubToken } from './utils/tokenValidator.js';
 import simpleGit from 'simple-git';
 import escapeHtml from 'lodash.escape';
 import { parseDiff } from './utils/diffParser.js';
@@ -23,10 +25,13 @@ import { analyzeComplexity } from './utils/complexityAnalyzer.js';
 import { deleteFolderRecursive, getFolderSize } from './utils/fileHelper.js';
 import { verifyWebhookSignature } from './utils/signatureVerifier.js';
 import ReviewQueue from './utils/reviewQueue.js';
+const reviewQueue = new ReviewQueue();
 import { scanFileContentForWarnings } from './utils/sanitizeFileContent.js';
-import { DANGEROUS_PHRASES } from './shared/dangerousPhrases.js';
+import { DANGEROUS_PHRASES, HOMOGLYPH_MAP } from './shared/dangerousPhrases.js';
 import { verifyPort } from './utils/envVerifier.js';
+import { sanitizeRedisKey } from './utils/redisSafe.js';
 import { mockAIReview } from './utils/mockAIReview.js';
+import { loadConfigFile, applySeverityConfig } from './utils/severityConfig.js';
 import AnalysisCache from './utils/analysisCache.js';
 import mongoose from 'mongoose';
 import Analytics from './models/Analytics.js';
@@ -39,11 +44,7 @@ validateSessionSecret();
 
 const octokit = new Octokit({ auth: process.env.GITHUB_PAT || undefined });
 
-connectDatabase().then(() => {
-  if (!isDatabaseConnected()) {
-    console.log('Server started in degraded mode (no database). Analytics will use file-based storage.');
-  }
-});
+let serverReady = false;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -139,10 +140,13 @@ app.use((req, res, next) => {
     const MAX_WEBHOOK_BODY = 5 * 1024 * 1024; // 5 MB
     const chunks = [];
     let totalBytes = 0;
+    req.on('error', () => {});
     req.on('data', chunk => {
       totalBytes += chunk.length;
       if (totalBytes > MAX_WEBHOOK_BODY) {
-        req.destroy(new Error('Webhook payload too large'));
+        res.status(413).json({ error: 'Webhook payload too large' });
+        req.resume();
+        return;
       }
       chunks.push(chunk);
     });
@@ -186,7 +190,7 @@ setInterval(() => {
   for (const [token, expiry] of csrfGraceTokenStore) {
     if (now > expiry) csrfGraceTokenStore.delete(token);
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 function generateCsrfToken() {
   const token = crypto.randomBytes(32).toString('hex');
@@ -226,10 +230,26 @@ function validateCsrfToken(token) {
 }
 
 // CSRF validation middleware for state-changing methods
-function csrfProtection(req, res, next) {
+async function csrfProtection(req, res, next) {
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
     const headerToken = req.headers['x-csrf-token'];
     const cookieToken = req.cookies?.[CSRF_COOKIE_NAME];
+    const sessionId = req.body?.sessionId;
+
+    // For session-scoped endpoints, additionally validate against stored CSRF token
+    if (sessionId) {
+      try {
+        const session = await Session.findOne({ sessionId }).select('csrfToken').lean();
+        if (session && session.csrfToken) {
+          const storedBuf = Buffer.from(String(session.csrfToken));
+          const headerBuf = Buffer.from(String(headerToken || ''));
+          if (storedBuf.length === headerBuf.length && crypto.timingSafeEqual(storedBuf, headerBuf)) {
+            return next();
+          }
+        }
+      } catch { /* fall through to normal validation */ }
+    }
+
     if (!headerToken || !cookieToken) {
       // Allow session creation and CSRF token endpoints to function
       if (req.path.endsWith('/api/session') || req.path.endsWith('/api/csrf-token')) {
@@ -339,6 +359,21 @@ function onShutdown() { cleanupTempRepos(); cleanupTimers(); if (redisClient) re
 process.on('SIGINT', onShutdown);
 process.on('SIGTERM', onShutdown);
 
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason instanceof Error ? reason.message : reason);
+  if (reason instanceof Error && reason.stack) {
+    console.error(reason.stack);
+  }
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error.message);
+  if (error.stack) {
+    console.error(error.stack);
+  }
+  process.exit(1);
+});
+
 // Repository contexts for chat are now persisted in MongoDB via the Session model.
 // The Session collection uses a TTL index on absoluteExpiry (expireAfterSeconds: 0)
 // so MongoDB handles expiry automatically — no in-process Map or setInterval needed.
@@ -447,9 +482,17 @@ const DELIVERY_REDIS_TTL = 300;
 
 // In-memory fallback for webhook dedup when Redis is unavailable
 const dedupMemorySet = new Set();
-const shaDedupMemorySet = new Set();
+const shaDedupMemoryMap = new Map();
 const DEDUP_MEMORY_TTL = DELIVERY_REDIS_TTL * 1000;
+const SHA_DEDUP_MAX_SIZE = 10000;
 
+// Atomic check-and-add for in-memory dedup (best-effort under concurrent load)
+function checkAndSetDedup(key) {
+  if (dedupMemorySet.has(key)) return 0;
+  dedupMemorySet.add(key);
+  setTimeout(() => dedupMemorySet.delete(key), DEDUP_MEMORY_TTL).unref();
+  return 1;
+}
 
 // Periodic sweeper for stale exclusive locks to prevent unbounded memory growth
 const EXCLUSIVE_LOCK_CLEANUP_INTERVAL = 5 * 60 * 1000;
@@ -457,30 +500,27 @@ const EXCLUSIVE_LOCK_TTL = 30 * 60 * 1000;
 const exclusiveLockCleanupTimer = setInterval(() => {
   reviewQueue.cleanupStaleExclusiveLocks(EXCLUSIVE_LOCK_TTL);
 }, EXCLUSIVE_LOCK_CLEANUP_INTERVAL);
+exclusiveLockCleanupTimer.unref();
+
+// Periodic sweeper for the SHA dedup memory map to prevent unbounded memory growth
+const SHA_DEDUP_CLEANUP_INTERVAL = 60 * 1000;
+const shaDedupCleanupTimer = setInterval(() => {
+  const now = Date.now();
+  const ttl = DELIVERY_REDIS_TTL * 1000;
+  for (const [key, timestamp] of shaDedupMemoryMap) {
+    if (now - timestamp > ttl) {
+      shaDedupMemoryMap.delete(key);
+    }
+  }
+}, SHA_DEDUP_CLEANUP_INTERVAL);
+shaDedupCleanupTimer.unref();
 
 function cleanupTimers() {
   clearInterval(exclusiveLockCleanupTimer);
+  clearInterval(shaDedupCleanupTimer);
 }
 
-  // NOTE: This HOMOGLYPH_MAP, DANGEROUS_PHRASES list, and validation logic is
-  // sourced from backend/shared/dangerousPhrases.js as the single source of
-  // truth. The ai-engine/app.py list uses shared-safety-config.json as the
-  // single source of truth. Keep both in sync. See issue #1390.
-  const HOMOGLYPH_MAP = {
-    // Lowercase Cyrillic
-    '\u0430': 'a', '\u0435': 'e', '\u043E': 'o', '\u0441': 'c', '\u0440': 'p',
-    '\u0445': 'x', '\u0443': 'y', '\u0432': 'b', '\u043D': 'h', '\u043A': 'k',
-    '\u043C': 'm', '\u0438': 'i',
-    // Uppercase Cyrillic
-    '\u0410': 'A', '\u0412': 'B', '\u0415': 'E', '\u0421': 'C', '\u041D': 'H',
-    '\u041A': 'K', '\u041C': 'M', '\u041E': 'O', '\u0420': 'P', '\u0423': 'Y',
-    '\u0425': 'X',
-    // Cyrillic lowercase that look like Latin uppercase
-    '\u0428': 'W',
-    // Greek
-    '\u03BF': 'o', '\u03B5': 'e', '\u03B1': 'a',
-    '\u039F': 'O', '\u0395': 'E', '\u0391': 'A'
-  };
+  // Loaded from shared-safety-config.json via dangerousPhrases.js
 
   function normalizeHomoglyphs(text) {
     return text.split('').map(ch => HOMOGLYPH_MAP[ch] || ch).join('');
@@ -492,16 +532,6 @@ function cleanupTimers() {
     const homoglyphCount = [...prompt].filter(ch => HOMOGLYPH_MAP[ch]).length;
     if (homoglyphCount / totalChars > 0.3) {
       throw new Error('System prompt contains an unusually high proportion of confusable Unicode characters.');
-    }
-    const scriptRuns = [...new Set([...prompt].map(ch => {
-      const cp = ch.codePointAt(0);
-      if (cp >= 0x0400 && cp <= 0x04FF) return 'cyrillic';
-      if (cp >= 0x0370 && cp <= 0x03FF) return 'greek';
-      if (cp >= 0x0061 && cp <= 0x007A) return 'latin';
-      return 'other';
-    }))];
-    if (scriptRuns.includes('cyrillic') || scriptRuns.includes('greek')) {
-      console.warn(`⚠️ System prompt contains non-Latin script characters: ${scriptRuns.join(', ')}`);
     }
   }
 
@@ -541,7 +571,7 @@ function requireJsonContentType(req, res, next) {
 // 🟢 Route: GitHub Import & AI Review
 app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, async (req, res) => {
   let { repoUrl, company = 'General', language = 'English', model = 'llama-3.3-70b-versatile',temperature = 0.7,
-     maxTokens = 2048, systemPrompt = '', batchSize = 5
+     maxTokens = 2048, systemPrompt = '', batchSize = 5, githubToken
    } = req.body;
 
   // Enforce boundary limits for batchSize to prevent downstream parsing crashes
@@ -560,6 +590,10 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
 
   if (!repoUrl) {
     return res.status(400).json({ error: 'GitHub Repository URL is required.' });
+  }
+
+  if (githubToken && !isValidGithubToken(githubToken)) {
+    return res.status(400).json({ error: 'Invalid GitHub Token format provided' });
   }
 
   if (!isValidRepoUrl(repoUrl)) {
@@ -627,6 +661,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
     try {
       // 1. Load ignore patterns and read files
       const ignorePatterns = loadIgnorePatterns(clonePath);
+      const severityConfig = loadConfigFile(clonePath);
       const files = readFilesRecursively(clonePath, [], clonePath, ignorePatterns);
       
       if (files.length === 0) {
@@ -677,6 +712,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
           console.warn('⚠️ FastAPI engine not running, falling back to local Express review handler');
           const mockRes = mockAIReview(files, model);
           mockRes._mock = true;
+          mockRes._mockWarning = true;
           return mockRes;
         }
       }, repoUrl);
@@ -703,6 +739,17 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
               }
             });
           }
+          
+          if (reviewResult.fileReviews[file.name]) {
+            ['bugs', 'security', 'optimization', 'styling'].forEach(cat => {
+              if (reviewResult.fileReviews[file.name][cat]) {
+                reviewResult.fileReviews[file.name][cat] = applySeverityConfig(
+                  reviewResult.fileReviews[file.name][cat],
+                  severityConfig
+                );
+              }
+            });
+          }
         });
       }
 
@@ -725,6 +772,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
       if (estimatedSize <= MAX_SESSION_DOC_SIZE) {
         sessionId = crypto.randomUUID();
         sessionOwnerToken = crypto.randomUUID();
+        const csrfToken = generateCsrfToken();
         try {
           await Session.create({
             sessionId,
@@ -733,6 +781,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
             files: storedFiles,
             lastAccessedAt: new Date(),
             ownerToken: sessionOwnerToken,
+            csrfToken,
           });
           sessionPersisted = true;
         } catch (sessionErr) {
@@ -841,9 +890,9 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
     security: Math.max(0, 100 - totalSecurityIssues * 15),
     maintainability: Math.max(0, 100 - totalBugs * 3),
     optimization: Math.max(0, 100 - totalOptimizations * 1),
-    documentation: 80,
-    duplication: 90,
-    testCoverage: 75,
+    documentation: null,
+    duplication: null,
+    testCoverage: null,
   },
 
   recommendations: [
@@ -935,8 +984,18 @@ if (reviewResult?.fileReviews) {
   });
 }
       
-      // 7. Return result
-      return res.json({
+      // 7. Set CSRF cookie if session was persisted
+      if (sessionPersisted) {
+        res.cookie(CSRF_COOKIE_NAME, csrfToken, {
+          httpOnly: true,
+          sameSite: 'strict',
+          path: '/',
+          secure: process.env.NODE_ENV === 'production',
+        });
+      }
+
+      // 8. Return result
+      return res.json({ ...(sessionPersisted ? { csrfToken } : {}),
   success: true,
 
   repoName,
@@ -969,6 +1028,108 @@ if (reviewResult?.fileReviews) {
     }
 });
 
+// 🟢 Route: Direct File Analysis (for VS Code extension and single-file use cases)
+app.post('/api/analyze-file', requireApiKey, requireJsonContentType, analyzeLimiter, async (req, res) => {
+  try {
+    let { files, company = 'General', language = 'English', model = 'llama-3.3-70b-versatile', temperature = 0.7, maxTokens = 2048, systemPrompt = '', batchSize = 5 } = req.body;
+
+    if (!files || !Array.isArray(files) || files.length === 0) {
+      return res.status(400).json({ error: 'At least one file is required.' });
+    }
+
+    for (const file of files) {
+      if (!file.name || !file.content) {
+        return res.status(400).json({ error: 'Each file must have a name and content.' });
+      }
+    }
+
+    batchSize = Math.max(1, Math.min(20, parseInt(batchSize, 10) || 5));
+    temperature = Math.max(0, Math.min(2, parseFloat(temperature) || 0.7));
+    maxTokens = Math.max(1, Math.min(128000, parseInt(maxTokens, 10) || 2048));
+
+    const normalizedModel = ALLOWED_ANALYSIS_MODELS.find(m => m.toLowerCase() === model.toLowerCase());
+    if (!normalizedModel) {
+      model = "llama-3.3-70b-versatile";
+    } else {
+      model = normalizedModel;
+    }
+
+    let validatedPrompt;
+    try {
+      validatedPrompt = validatePrompt(systemPrompt);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    const fileWarnings = [];
+    for (const file of files) {
+      const scanResult = scanFileContentForWarnings(file.content);
+      for (const warning of scanResult) {
+        fileWarnings.push({ file: file.name, warning });
+      }
+    }
+
+    const aiEngineUrl = process.env.AI_ENGINE_URL || 'http://localhost:8000';
+    const baseUrl = aiEngineUrl.replace(/\/+$/, '');
+
+    let reviewResult;
+    try {
+      const aiResponse = await fetchWithTimeout(`${baseUrl}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REPOSAGE_API_KEY || '' },
+        body: JSON.stringify({ files, company, language, model, temperature, maxTokens, systemPrompt: validatedPrompt, batchSize })
+      }, 120000);
+
+      if (aiResponse.ok) {
+        const resData = await aiResponse.json();
+        reviewResult = resData;
+      } else if (aiResponse.status === 401) {
+        const errData = await aiResponse.json().catch(() => ({}));
+        throw new Error(errData.error || 'AI Engine authentication failed');
+      } else {
+        throw new Error('AI engine responded with error');
+      }
+    } catch (err) {
+      if (err.message.includes('authentication failed')) {
+        throw err;
+      }
+      const { mockAIReview } = await import('./utils/mockAIReview.js');
+      const mockRes = mockAIReview(files, model);
+      mockRes._mockWarning = true;
+      reviewResult = mockRes;
+    }
+
+    if (reviewResult && reviewResult.fileReviews) {
+      reviewResult.metrics = {};
+      files.forEach(file => {
+        reviewResult.metrics[file.name] = analyzeComplexity(file.content, file.name);
+        const secretFindings = scanSecrets(file.content);
+        if (secretFindings.length > 0) {
+          if (!reviewResult.fileReviews[file.name]) {
+            reviewResult.fileReviews[file.name] = { bugs: [], security: [], optimization: [], styling: [] };
+          }
+          secretFindings.forEach(finding => {
+            const duplicate = reviewResult.fileReviews[file.name].security.some(s => s.line === finding.line && s.type === finding.type);
+            if (!duplicate) {
+              reviewResult.fileReviews[file.name].security.unshift(finding);
+            }
+          });
+        }
+      });
+    }
+
+    return res.json({
+      success: true,
+      analysis: reviewResult,
+      source: 'direct',
+      ...(fileWarnings.length > 0 ? { warnings: fileWarnings } : {})
+    });
+  } catch (err) {
+    console.error('File analysis failed:', err);
+    return res.status(500).json({ error: 'An error occurred during file analysis.' });
+  }
+});
+
 // 🟢 Route: AI Chat with Repository (session-isolated per issue #59)
 app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async (req, res) => {
   let { message, history = [], model = 'llama-3.3-70b-versatile', temperature = 0.7, maxTokens = 2048, systemPrompt = 'You are a helpful code reviewer.', sessionId, useRag, ragSources } = req.body;
@@ -987,6 +1148,9 @@ app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async 
   if (!sessionId) {
     return res.status(400).json({ error: 'sessionId is required for chat.' });
   }
+  if (!isValidUuid(sessionId)) {
+    return res.status(400).json({ error: 'Invalid sessionId format.' });
+  }
 
   let validatedPrompt;
   try {
@@ -1004,12 +1168,6 @@ app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async 
       let context = null;
       try {
         context = await Session.findOne({ sessionId });
-        if (context) {
-          // Update lastAccessedAt for activity tracking. createdAt remains
-          // unchanged so the original TTL (30 minutes from creation) is
-          // preserved, preventing indefinite session extension (see issue #672).
-          await Session.updateOne({ sessionId }, { $set: { lastAccessedAt: new Date() }, $max: { absoluteExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
-        }
       } catch (sessionErr) {
         console.warn('⚠️ Failed to retrieve session from MongoDB:', sessionErr.message);
       }
@@ -1061,10 +1219,10 @@ app.post('/api/chat', requireApiKey, requireJsonContentType, chatLimiter, async 
           res.json(data);
         } else {
           const errText = await aiResponse.text();
-          throw new Error(errText || 'AI engine chat request failed');
+          throw new Error(sanitizeErrorMessage(errText) || 'AI engine chat request failed');
         }
       } catch (err) {
-        console.error('❌ Chat API Error:', err.message);
+        console.error('❌ Chat API Error:', sanitizeErrorMessage(err.message));
 
         // Simple local fallback if Python FastAPI server is offline
         const responseMessage = `[Fallback Response] I see you are asking about: "${message}". Currently, the FastAPI AI Engine is offline, so I cannot analyze the full codebase for your query. Please make sure the AI Engine service is running on port 8000.`;
@@ -1101,10 +1259,10 @@ app.post('/api/rag/query', requireApiKey, async (req, res) => {
       return res.json(data);
     } else {
       const errText = await aiResponse.text();
-      throw new Error(errText || 'AI engine RAG query failed');
+      throw new Error(sanitizeErrorMessage(errText) || 'AI engine RAG query failed');
     }
   } catch (err) {
-    console.error('❌ RAG Query API Error:', err.message);
+    console.error('❌ RAG Query API Error:', sanitizeErrorMessage(err.message));
     return res.status(502).json({ error: 'RAG query failed: AI Engine unavailable.' });
   }
 });
@@ -1120,7 +1278,7 @@ setInterval(() => {
       repoRequestCounts.delete(key);
     }
   }
-}, 60 * 1000);
+}, 60 * 1000).unref();
 
 const webhookLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -1181,11 +1339,13 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
     if (!deliveryId || typeof deliveryId !== 'string') {
       return res.status(400).json({ error: 'Missing x-github-delivery header.' });
     }
-    deliveryId = deliveryId.replace(/[^a-zA-Z0-9_-]/g, '');
-    if (!deliveryId) {
-      return res.status(400).json({ error: 'Invalid x-github-delivery header.' });
+    const GITHUB_DELIVERY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!GITHUB_DELIVERY_UUID_RE.test(deliveryId)) {
+      console.warn(`Rejected malformed x-github-delivery header: ${deliveryId}`);
+      return res.status(400).json({ error: 'Invalid delivery ID format.' });
     }
-    const deliveryDedupKey = `webhook:delivery:${deliveryId}`;
+    const safeDeliveryId = sanitizeRedisKey(deliveryId);
+    const deliveryDedupKey = `webhook:delivery:${safeDeliveryId}`;
     let isDuplicate;
     if (redisClient) {
       isDuplicate = await redisClient.setnx(deliveryDedupKey, Date.now().toString());
@@ -1208,13 +1368,30 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
       const repo = payload.repository.name;
       const reviewKey = `${owner}/${repo}/#${pullNumber}`;
 
-      const shaKey = `${owner}/${repo}/#${pullNumber}`;
+      const shaKey = `${sanitizeRedisKey(owner)}/${sanitizeRedisKey(repo)}/#${sanitizeRedisKey(String(pullNumber))}`;
       const shaDedupKey = `webhook:sha:${shaKey}`;
       let shaAlreadyReviewed;
       if (redisClient) {
-        shaAlreadyReviewed = await redisClient.sismember(shaDedupKey, headSha);
+        const added = await redisClient.sadd(shaDedupKey, headSha);
+        if (!added) {
+          shaAlreadyReviewed = 1;
+        } else {
+          shaAlreadyReviewed = 0;
+          await redisClient.expire(shaDedupKey, DELIVERY_REDIS_TTL);
+        }
       } else {
-        shaAlreadyReviewed = shaDedupMemorySet.has(`${shaDedupKey}:${headSha}`) ? 1 : 0;
+        const mapKey = `${shaDedupKey}:${headSha}`;
+        shaAlreadyReviewed = shaDedupMemoryMap.has(mapKey) ? 1 : 0;
+        if (!shaAlreadyReviewed) {
+          // Enforce max size cap with oldest-entry eviction
+          if (shaDedupMemoryMap.size >= SHA_DEDUP_MAX_SIZE) {
+            const oldestKey = shaDedupMemoryMap.keys().next().value;
+            if (oldestKey !== undefined) {
+              shaDedupMemoryMap.delete(oldestKey);
+            }
+          }
+          shaDedupMemoryMap.set(mapKey, Date.now());
+        }
       }
       if (shaAlreadyReviewed) {
         console.log(`⏭️ Already reviewed commit ${headSha.substring(0,7)} for PR #${pullNumber}`);
@@ -1224,23 +1401,44 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
       console.log(`📡 GitHub Webhook received: PR #${pullNumber} ${action} (${headSha.substring(0,7)}) in ${owner}/${repo}`);
 
       if (reviewQueue._queues.size >= reviewQueue._maxQueues) {
+        if (redisClient) {
+          await redisClient.srem(shaDedupKey, headSha);
+        } else {
+          shaDedupMemoryMap.delete(`${shaDedupKey}:${headSha}`);
+        }
         return res.status(429).json({ error: 'Too many pending reviews. Try again later.' });
       }
 
       // Per-repository rate limiting
       const repoKey = `${owner}/${repo}`;
-      const now = Date.now();
-      const repoEntry = repoRequestCounts.get(repoKey) || { count: 0, windowStart: now };
-      if (now - repoEntry.windowStart > REPO_WINDOW_MS) {
-        repoEntry.count = 0;
-        repoEntry.windowStart = now;
+      let currentCount;
+      if (redisClient) {
+        const redisKey = `ratelimit:repo:${repoKey}`;
+        currentCount = await redisClient.incr(redisKey);
+        if (currentCount === 1) {
+          await redisClient.expire(redisKey, Math.ceil(REPO_WINDOW_MS / 1000));
+        }
+      } else {
+        const now = Date.now();
+        const repoEntry = repoRequestCounts.get(repoKey) || { count: 0, windowStart: now };
+        if (now - repoEntry.windowStart > REPO_WINDOW_MS) {
+          repoEntry.count = 0;
+          repoEntry.windowStart = now;
+        }
+        repoEntry.count++;
+        repoRequestCounts.set(repoKey, repoEntry);
+        currentCount = repoEntry.count;
       }
-      if (repoEntry.count >= REPO_MAX_REQUESTS) {
+
+      if (currentCount > REPO_MAX_REQUESTS) {
         console.warn(`⚠️ Rate limit exceeded for repository ${repoKey}`);
+        if (redisClient) {
+          await redisClient.srem(shaDedupKey, headSha);
+        } else {
+          shaDedupMemoryMap.delete(`${shaDedupKey}:${headSha}`);
+        }
         return res.status(429).json({ error: 'Too many requests for this repository. Try again later.' });
       }
-      repoEntry.count++;
-      repoRequestCounts.set(repoKey, repoEntry);
 
       const enqueuePromise = reviewQueue.enqueue(reviewKey, { owner, repo, pullNumber, headSha }, async (item) => {
         try {
@@ -1250,19 +1448,17 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
           if (redisClient) {
             await redisClient.srem(shaDedupKey, headSha);
           } else {
-            shaDedupMemorySet.delete(`${shaDedupKey}:${headSha}`);
+            shaDedupMemoryMap.delete(`${shaDedupKey}:${headSha}`);
           }
         }
       });
-      if (enqueuePromise) {
+      if (!enqueuePromise) {
+        // Revert dedup if enqueue failed synchronously
         if (redisClient) {
-          await redisClient.sadd(shaDedupKey, headSha);
-          await redisClient.expire(shaDedupKey, DELIVERY_REDIS_TTL);
+          await redisClient.srem(shaDedupKey, headSha);
         } else {
-          shaDedupMemorySet.add(`${shaDedupKey}:${headSha}`);
-          setTimeout(() => shaDedupMemorySet.delete(`${shaDedupKey}:${headSha}`), DELIVERY_REDIS_TTL * 1000);
+          shaDedupMemoryMap.delete(`${shaDedupKey}:${headSha}`);
         }
-      } else {
         return res.status(429).json({ error: 'Review queue full. Try again later.' });
       }
     }
@@ -1272,7 +1468,7 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
 });
 
 // 🟢 Route: Create GitHub Issue automatically for Code Reviews
-app.post('/api/issues/create', requireApiKey, issueLimiter, async (req, res) => {
+app.post('/api/issues/create', requireApiKey, requireJsonContentType, issueLimiter, async (req, res) => {
   const { repoUrl, title, body, labels = [] } = req.body;
   const token = process.env.GITHUB_PAT;
 
@@ -1432,8 +1628,13 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
       }, 60000);
 
       if (aiResponse.ok) {
-        const result = await aiResponse.json();
-        if (result.comments && Array.isArray(result.comments)) {
+        let result;
+        try {
+          result = await aiResponse.json();
+        } catch (parseErr) {
+          console.warn('⚠️ AI engine returned HTTP 200 with malformed (non-JSON) body:', parseErr.message);
+        }
+        if (result && Array.isArray(result.comments)) {
           result.comments.forEach(c => {
             const validLines = validChangedLines.get(c.path);
             if (!validLines || !validLines.has(Number(c.line))) {
@@ -1450,10 +1651,18 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
           if (aiCommentsDiscarded > 0) {
             console.warn(`⚠️ ${aiCommentsDiscarded} AI comments could not be posted due to line number mismatches with the diff`);
           }
+          aiEngineQueried = true;
+        } else {
+          console.warn('⚠️ AI engine returned HTTP 200 with empty or malformed response body — not treating as a clean analysis');
         }
-        aiEngineQueried = true;
+      } else if (aiResponse.status === 401) {
+        console.error('🚨 AI Engine rejected authentication. Check REPOSAGE_API_KEY in backend/.env');
+        throw new Error('AI Engine authentication failed');
       }
     } catch (err) {
+      if (err.message === 'AI Engine authentication failed') {
+        throw err;
+      }
       console.warn("⚠️ FastAPI AI Engine error, posting local scans only:", err.message);
     }
   }
@@ -1476,7 +1685,7 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
         body += `**Part ${batchIdx + 1} of ${commentBatches.length}** — Showing ${batch.length} of ${commentsToPost.length} findings.\n\n`;
       }
       if (!aiEngineQueried && filesToReview.length > 0 && batchIdx === 0) {
-        body += `⚠️ **Limited Review:** The AI engine was unreachable during this review. Only regex-based secret scanning was performed. AI-powered bug/performance/style analysis was skipped. Please ensure the AI Engine service is running and re-trigger the review for a complete audit.\n\n`;
+        body += `⚠️ **Limited Review:** The AI engine was unreachable or returned an unexpected response during this review. Only regex-based secret scanning was performed. AI-powered bug/performance/style analysis was skipped. Please ensure the AI Engine service is running correctly and re-trigger the review for a complete audit.\n\n`;
       }
       body += `I have audited the code changes in this Pull Request and generated **${commentsToPost.length} actionable inline suggestion${commentsToPost.length === 1 ? '' : 's'}**.\n\nPlease review my feedback and suggestions below. Happy coding! 🚀`;
 
@@ -1505,18 +1714,18 @@ The AI engine identified **${aiCommentsDiscarded} potential issue(s)** but could
 **Action required:** Please manually review the changes for issues the AI may have detected. Re-run the review after pushing additional changes to re-evaluate.`
     });
   } else if (!aiEngineQueried) {
-    console.error('❌ AI Engine was unreachable — posting COMMENT review instead of auto-approving.');
+    console.error('❌ AI Engine was unreachable or returned an empty/malformed response — posting COMMENT review instead of auto-approving.');
     await octokit.rest.pulls.createReview({
       owner,
       repo,
       pull_number: pullNumber,
       commit_id: headSha,
       event: 'COMMENT',
-      body: `## ⚠️ RepoSage AI Code Review — AI Engine Unavailable
+      body: `## ⚠️ RepoSage AI Code Review — AI Engine Issue
 
-The AI engine could not be reached during this review. The secrets scanner found **0 issues**, but the PR was **not** fully reviewed by the AI.
+The AI engine could not be reached or returned an unexpected response during this review. The secrets scanner found **0 issues**, but the PR was **not** fully reviewed by the AI.
 
-Please ensure the AI Engine service is running and re-trigger the review for a complete analysis.`
+Please ensure the AI Engine service is running correctly and re-trigger the review for a complete analysis.`
     });
   } else {
     console.log('🎉 No code issues or recommendations found. Posting approval review...');
@@ -1856,6 +2065,9 @@ app.get('/api/analytics/trends', requireApiKey, async (req, res) => {
     };
 
     if (req.query.sessionId && typeof req.query.sessionId === 'string') {
+      if (!isValidUuid(req.query.sessionId)) {
+        return res.status(400).json({ error: 'Invalid sessionId parameter format.' });
+      }
       matchFilter.sessionId = req.query.sessionId;
     }
 
@@ -1901,6 +2113,7 @@ app.get('/api/analytics/trends', requireApiKey, async (req, res) => {
 app.get("/api/review-history", requireApiKey, async (req, res) => {
 
     try {
+        await ensureConnection();
         const page = Math.max(1, parseInt(req.query.page) || 1);
         const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
         const skip = (page - 1) * limit;
@@ -1933,6 +2146,7 @@ app.get("/api/review-history", requireApiKey, async (req, res) => {
 app.get("/api/review-history/:repo", requireApiKey, async (req, res) => {
 
     try {
+        await ensureConnection();
         const repo = req.params.repo;
         if (typeof repo !== 'string' || repo.length === 0 || !/^[a-zA-Z0-9._-]+$/.test(repo)) {
           return res.status(400).json({ error: 'Invalid repo parameter.' });
@@ -1970,6 +2184,7 @@ app.get("/api/review-history/:repo", requireApiKey, async (req, res) => {
 app.get("/api/review-history/compare/:id1/:id2", requireApiKey, async (req, res) => {
 
     try {
+        await ensureConnection();
         if (!mongoose.Types.ObjectId.isValid(req.params.id1) || !mongoose.Types.ObjectId.isValid(req.params.id2)) {
           return res.status(400).json({ error: 'Invalid ID format.' });
         }
@@ -2026,6 +2241,14 @@ app.get("/api/review-history/compare/:id1/:id2", requireApiKey, async (req, res)
 });
 
 app.get('/health', (req, res) => {
+  if (!serverReady) {
+    return res.status(503).json({
+      status: 'starting_up',
+      timestamp: new Date().toISOString(),
+      database: isDatabaseConnected() ? 'connected' : 'disconnected',
+      message: 'Server is still initializing. Please retry shortly.',
+    });
+  }
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
@@ -2034,8 +2257,51 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Sanitize error messages that may contain API keys or sensitive tokens.
+const SANITIZE_PATTERNS = [
+  { pattern: /(?:sk-|gsk_|api[_-]?key|apikey|token|secret|password|auth)[\s=:"']+[^\s"']{8,}/gi, replacement: '***' },
+  { pattern: /[A-Za-z0-9_-]{32,}/g, replacement: '***' },
+];
+
+function sanitizeErrorMessage(msg) {
+  if (!msg || typeof msg !== 'string') return msg;
+  let sanitized = msg;
+  for (const { pattern, replacement } of SANITIZE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, replacement);
+  }
+  try {
+    const decoded = decodeURIComponent(sanitized);
+    if (decoded !== sanitized) {
+      for (const { pattern, replacement } of SANITIZE_PATTERNS) {
+        sanitized = sanitized.replace(pattern, replacement);
+      }
+    }
+  } catch { /* keep as-is */ }
+  return sanitized;
+}
+
+const errorHandler = (err, req, res, next) => {
+  const safeMessage = sanitizeErrorMessage(err.message);
+  console.error('Unhandled error in request:', safeMessage);
+  if (err.stack) {
+    console.error(err.stack);
+  }
+  if (res.headersSent) {
+    return next(err);
+  }
+  const statusCode = err.statusCode || err.status || 500;
+  res.status(statusCode).json({
+    error: process.env.NODE_ENV === 'production' ? 'Internal server error' : safeMessage,
+  });
+};
+app.use(errorHandler);
+
 async function startServer() {
   await connectDatabase();
+  if (!isDatabaseConnected()) {
+    console.log('Server started in degraded mode (no database). Analytics will use file-based storage.');
+  }
+  serverReady = true;
   app.listen(PORT, () => {
     console.log(`🟢 RepoSage Backend running on http://localhost:${PORT}`);
   }).on('error', (err) => {

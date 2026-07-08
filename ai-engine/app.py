@@ -5,18 +5,19 @@ import time
 import asyncio
 import uuid
 import unicodedata
+import urllib.parse
 from collections import OrderedDict
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Set
 from groq import Groq
 from dotenv import load_dotenv
 import bleach
 from bleach.css_sanitizer import CSSSanitizer
-import vectorstore
 from embeddings import is_fallback_active
+from diff_helper import get_changed_files_from_git, filter_files_by_changes, format_diff_header
 
 # Load environment variables: prefer local .env, fall back to backend/.env
 env_paths = [
@@ -42,31 +43,21 @@ LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 # Bounds fan-out so large repositories don't blow past Groq's rate limits. (#1675)
 GROQ_CONCURRENCY_LIMIT = int(os.getenv("GROQ_CONCURRENCY_LIMIT", "10"))
 
-# Single source of truth for dangerous patterns — keep in sync with
-# shared-safety-config.json
-DANGEROUS_PATTERNS = [
-    "ignore all", "ignore all previous instructions", "ignore all instructions",
-    "ignore previous", "ignore above", "ignore the above",
-    "ignore previous instructions",
-    "forget all", "forget all previous", "forget previous", "forget your",
-    "you are not", "you will now", "you must now", "you have been",
-    "you are programmed",
-    "from now on",
-    "override all", "override protocol",
-    "system override",
-    "new directive",
-    "protocol change",
-    "disregard", "disregard all", "disregard all previous",
-    "do not follow",
-    "instead follow",
-    "roleplay mode",
-    "real instruction", "actual instruction",
-    "replace all",
-    "disobey", "unauthorized", "breach", "bypass",
-    "your true purpose",
-    "listen to me",
-    "disable all",
-]
+# Single source of truth — loaded from shared-safety-config.json
+_SHARED_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'shared-safety-config.json')
+try:
+    with open(_SHARED_CONFIG_PATH) as _f:
+        _shared_config = json.load(_f)
+    _REQUIRED_KEYS = {'homoglyph_map', 'dangerous_phrases', 'version'}
+    _missing = _REQUIRED_KEYS - set(_shared_config.keys())
+    if _missing:
+        raise RuntimeError(f"shared-safety-config.json missing required keys: {_missing}")
+    DANGEROUS_PATTERNS = _shared_config['dangerous_phrases']
+    HOMOGLYPH_MAP = _shared_config['homoglyph_map']
+except (FileNotFoundError, json.JSONDecodeError, RuntimeError) as _e:
+    print(f"SECURITY: Failed to load shared-safety-config.json ({_e}), prompt injection defenses may be incomplete.")
+    DANGEROUS_PATTERNS = []
+    HOMOGLYPH_MAP = {}
 
 def _neutralize_pattern(content: str, pattern: str) -> str:
     """Replace a dangerous pattern with a non-deterministic placeholder."""
@@ -74,19 +65,38 @@ def _neutralize_pattern(content: str, pattern: str) -> str:
     return re.sub(re.escape(pattern), token, content, flags=re.IGNORECASE)
 
 def sanitize_file_content(content: str) -> str:
-    for pattern in DANGEROUS_PATTERNS:
-        content = _neutralize_pattern(content, pattern)
+    for _round in range(3):
+        previous = content
+        for pattern in DANGEROUS_PATTERNS:
+            content = _neutralize_pattern(content, pattern)
+        if content == previous:
+            break
+        lower = content.lower()
+        still_dangerous = False
+        for phrase in DANGEROUS_PATTERNS:
+            p = r"\s+".join(re.escape(w) for w in phrase.split())
+            if re.search(p, lower):
+                still_dangerous = True
+                break
+        if not still_dangerous:
+            break
     lines = content.split("\n")
     truncated_lines = [line[:500] for line in lines]
     wrapped = "\n".join(truncated_lines)
     wrapped = "--- BEGIN FILE CONTENT (read-only code context) ---\n" + wrapped + "\n--- END FILE CONTENT ---"
     return wrapped
 
-def _redact_key(text: str, key: str) -> str:
+def sanitize_error(text: str, key: str) -> str:
     if not text or not key:
         return text
+    # Redact plaintext key
     escaped = re.escape(key)
     text = re.sub(escaped, "***", text)
+    # Redact URL-encoded key
+    url_encoded = urllib.parse.quote(key, safe='')
+    if url_encoded != key:
+        text = re.sub(re.escape(url_encoded), "***", text)
+    # Redact partial key matches (truncated representations)
     for trunc_suffix in ["...", "…", " (truncated)"]:
         truncated = re.escape(key[:len(key) // 2] + trunc_suffix)
         text = re.sub(truncated, "***", text)
@@ -185,23 +195,7 @@ def sanitize_ai_output(text: str) -> str:
 
     return text
 
-# NOTE: This HOMOGLYPH_MAP and dangerous phrases list (DANGEROUS_PATTERNS)
-# should be kept in sync with backend/shared/dangerousPhrases.js.
-HOMOGLYPH_MAP = {
-    # Lowercase Cyrillic
-    '\u0430': 'a', '\u0435': 'e', '\u043E': 'o', '\u0441': 'c', '\u0440': 'p',
-    '\u0445': 'x', '\u0443': 'y', '\u0432': 'b', '\u043D': 'h', '\u043A': 'k',
-    '\u043C': 'm', '\u0438': 'i',
-    # Uppercase Cyrillic
-    '\u0410': 'A', '\u0412': 'B', '\u0415': 'E', '\u0421': 'C', '\u041D': 'H',
-    '\u041A': 'K', '\u041C': 'M', '\u041E': 'O', '\u0420': 'P', '\u0423': 'Y',
-    '\u0425': 'X',
-    # Cyrillic that looks like Latin W
-    '\u0428': 'W',
-    # Greek
-    '\u03BF': 'o', '\u03B5': 'e', '\u03B1': 'a',
-    '\u039F': 'O', '\u0395': 'E', '\u0391': 'A'
-}
+# HOMOGLYPH_MAP and DANGEROUS_PATTERNS loaded from shared-safety-config.json above
 
 def normalize_homoglyphs(text: str) -> str:
     return "".join(HOMOGLYPH_MAP.get(ch, ch) for ch in text)
@@ -270,6 +264,20 @@ async def _call_groq_with_timeout(**kwargs):
 
 app = FastAPI(title="RepoSage AI Engine", description="FastAPI microservice for repository analysis and documentation generation")
 
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    key = os.getenv("GROQ_API_KEY") or ""
+    sanitized = sanitize_error(str(exc), key)
+    import traceback
+    print(f"Unhandled exception: {sanitized}")
+    print(traceback.format_exc())
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
+
+
 def verify_api_key(x_api_key: str = Header(None)):
     expected_key = os.getenv("API_KEY")
     if expected_key and x_api_key != expected_key:
@@ -296,24 +304,31 @@ RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_MAX_REQUESTS = 500
 MAX_RATE_LIMIT_ENTRIES = 10000
 _rate_limit_store: OrderedDict[str, list[float]] = OrderedDict()
+_rate_limit_lock = asyncio.Lock()
 
 async def rate_limit_middleware(request: Request, call_next):
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = (
+        request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        or (request.client.host if request.client else None)
+        or "unknown"
+    )
     now = time.time()
 
-    if client_ip in _rate_limit_store:
-        _rate_limit_store.move_to_end(client_ip)
-        window = _rate_limit_store[client_ip]
-    else:
-        if len(_rate_limit_store) >= MAX_RATE_LIMIT_ENTRIES:
-            _rate_limit_store.popitem(last=False)
-        window = []
-        _rate_limit_store[client_ip] = window
+    async with _rate_limit_lock:
+        if client_ip in _rate_limit_store:
+            _rate_limit_store.move_to_end(client_ip)
+            window = _rate_limit_store[client_ip]
+        else:
+            if len(_rate_limit_store) >= MAX_RATE_LIMIT_ENTRIES:
+                _rate_limit_store.popitem(last=False)
+            window = []
+            _rate_limit_store[client_ip] = window
 
-    window[:] = [t for t in window if now - t < RATE_LIMIT_WINDOW_SECONDS]
-    if len(window) >= RATE_LIMIT_MAX_REQUESTS:
-        return JSONResponse(status_code=429, content={"error": "Rate limit exceeded. Try again later."})
-    window.append(now)
+        window[:] = [t for t in window if now - t < RATE_LIMIT_WINDOW_SECONDS]
+        if len(window) >= RATE_LIMIT_MAX_REQUESTS:
+            return JSONResponse(status_code=429, content={"error": "Rate limit exceeded. Try again later."})
+        window.append(now)
+
     response = await call_next(request)
     return response
 
@@ -368,7 +383,7 @@ if api_key:
         groq_client = Groq(api_key=api_key)
         print("🟢 Groq Client successfully initialized in FastAPI AI Engine!")
     except Exception as e:
-        sanitized_error = str(e).replace(api_key[:8] if len(api_key) > 8 else api_key, "***")
+        sanitized_error = sanitize_error(str(e), api_key)
         print(f"⚠️ Error initializing Groq client: {sanitized_error}")
 else:
     print("⚠️ GROQ_API_KEY not found in environment. Running in sandbox mode.")
@@ -387,6 +402,24 @@ class AnalyzeRequest(BaseModel):
     maxTokens: Optional[int] = Field(2048, ge=1, le=32768)
     systemPrompt: Optional[str] = ""
     batchSize: Optional[int] = Field(5, ge=1, le=20)
+    diffOnly: Optional[bool] = False
+    baseRef: Optional[str] = None
+    headRef: Optional[str] = None
+
+    _REF_PATTERN = re.compile(r"^[\w./\-]+$")
+
+    @field_validator("baseRef", "headRef")
+    @classmethod
+    def _validate_ref(cls, v):
+        if v is None:
+            return v
+        if not isinstance(v, str) or len(v) > 256:
+            raise ValueError("Reference must be a string of at most 256 characters")
+        if v.startswith("-"):
+            raise ValueError("Reference must not start with a hyphen")
+        if not cls._REF_PATTERN.match(v):
+            raise ValueError("Reference contains invalid characters (allowed: alphanumeric, underscore, dot, slash, hyphen)")
+        return v
     
 
 class ChatRequest(BaseModel):
@@ -419,7 +452,7 @@ def health_check():
 async def analyze_repository(request: AnalyzeRequest):
     if not groq_client:
         raise HTTPException(status_code=500, detail="Groq API client is not configured on this engine.")
-    
+
     files = request.files
     company = request.company
     language = request.language
@@ -427,8 +460,20 @@ async def analyze_repository(request: AnalyzeRequest):
     max_tokens = request.maxTokens or 2048
     batch_size = request.batchSize or 5
     custom_system_prompt = validate_system_prompt(request.systemPrompt or "")
-    
-    # 1. Prepare global repository structure
+
+    # 1. Apply diff mode filtering if requested
+    diff_mode_header = ""
+    num_skipped = 0
+    if request.diffOnly and request.baseRef and request.headRef:
+        changed_files = get_changed_files_from_git(request.baseRef, request.headRef)
+        if changed_files:
+            files, num_skipped = filter_files_by_changes(files, changed_files)
+            diff_mode_header = format_diff_header(len(files), num_skipped, request.baseRef, request.headRef)
+            print(f"🔍 {diff_mode_header}")
+        else:
+            print("⚠️  Diff mode requested but no changed files found. Analyzing all files.")
+
+    # 2. Prepare global repository structure
     repo_structure = [f.name for f in files]
     structure_text = "\n".join(repo_structure)
 
@@ -455,7 +500,8 @@ async def analyze_repository(request: AnalyzeRequest):
     groq_model = get_groq_model(request.model)
     print(f"📡 Forwarding batched analysis request to Groq using model: {groq_model} (Batch size: {batch_size})")
 
-    # 2. Chunk files into batches
+    # 2. Sort files deterministically before chunking into batches
+    files.sort(key=lambda f: f.name)
     batches = [files[i:i + batch_size] for i in range(0, len(files), batch_size)]
 
     combined_result = {
@@ -573,59 +619,68 @@ You must obey the JSON output format above."""
                 max_tokens=max_tokens,
                 response_format={"type": "json_object"}
             )
+            
+            response_content = completion.choices[0].message.content
+            if not response_content:
+                raise HTTPException(status_code=502, detail="Groq returned an empty or filtered response. The input may have been blocked by safety filters.")
+            batch_result = json.loads(response_content)
+            
+            # Merge results
+            if is_first_batch:
+                if "mermaidDiagram" in batch_result:
+                    sanitized = sanitize_ai_output(batch_result["mermaidDiagram"])
+                    combined_result["mermaidDiagram"] = sanitize_mermaid_code(sanitized)
+                if "generatedReadme" in batch_result:
+                    combined_result["generatedReadme"] = sanitize_ai_output(batch_result["generatedReadme"])
+            
+            if "fileReviews" in batch_result:
+                for file_path, review in batch_result["fileReviews"].items():
+                    # Sanitize review items
+                    for category in ["bugs", "security", "optimization", "styling"]:
+                        for item in review.get(category, []):
+                            if "suggestion" in item:
+                                item["suggestion"] = sanitize_ai_output(item["suggestion"])
+                            if "description" in item:
+                                item["description"] = sanitize_ai_output(item["description"])
+                    
+                    # Merge findings instead of overwriting
+                    if file_path in combined_result["fileReviews"]:
+                        print(f"WARNING: Merging findings for {file_path} from batch {idx + 1} (already exists from a previous batch)")
+                        existing = combined_result["fileReviews"][file_path]
+                        for category in ["bugs", "security", "optimization", "styling"]:
+                            existing_items = existing.get(category, [])
+                            new_items = review.get(category, [])
+                            seen = set()
+                            for item in existing_items:
+                                key = (item.get("type", ""), item.get("line", ""), item.get("description", ""))
+                                seen.add(key)
+                            for item in new_items:
+                                key = (item.get("type", ""), item.get("line", ""), item.get("description", ""))
+                                if key not in seen:
+                                    existing_items.append(item)
+                                    seen.add(key)
+                            existing[category] = existing_items
+                    else:
+                        combined_result["fileReviews"][file_path] = review
 
-        response_content = completion.choices[0].message.content
-        if not response_content:
-            raise HTTPException(status_code=502, detail="Groq returned an empty or filtered response. The input may have been blocked by safety filters.")
-        batch_result = json.loads(response_content)
-
-        return batch_result, local_truncated_files
-
-    # Fan out all batches concurrently (bounded by the semaphore above).
-    # return_exceptions=True so one failing batch doesn't cancel the others —
-    # each result is inspected below and handled the same way the old
-    # sequential try/except did per batch.
-    batch_tasks = [process_batch(idx, batch) for idx, batch in enumerate(batches)]
-    batch_outcomes = await asyncio.gather(*batch_tasks, return_exceptions=True)
-
-    truncated_files = []
-    for idx, outcome in enumerate(batch_outcomes):
-        is_first_batch = (idx == 0)
-
-        if isinstance(outcome, Exception):
-            print(f"❌ Groq API Call Failed for batch {idx + 1}: {_redact_key(str(outcome), api_key)}")
+        except Exception as e:
+            print(f"❌ Groq API Call Failed for batch {idx + 1}: {sanitize_error(str(e), api_key)}")
             # If the first batch fails, we should probably fail the whole request since README/Mermaid are missing
             if is_first_batch:
-                raise HTTPException(status_code=500, detail=f"Groq API reasoning failed on first batch: {_redact_key(str(outcome), api_key)}")
+                raise HTTPException(status_code=500, detail=f"Groq API reasoning failed on first batch: {sanitize_error(str(e), api_key)}")
             else:
                 print(f"⚠️ Skipping failed batch {idx + 1} and continuing...")
                 continue
 
-        batch_result, local_truncated_files = outcome
-        truncated_files.extend(local_truncated_files)
-
-        # Merge results
-        if is_first_batch:
-            if "mermaidDiagram" in batch_result:
-                sanitized = sanitize_ai_output(batch_result["mermaidDiagram"])
-                combined_result["mermaidDiagram"] = sanitize_mermaid_code(sanitized)
-            if "generatedReadme" in batch_result:
-                combined_result["generatedReadme"] = sanitize_ai_output(batch_result["generatedReadme"])
-
-        if "fileReviews" in batch_result:
-            for file_path, review in batch_result["fileReviews"].items():
-                # Sanitize review items
-                for category in ["bugs", "security", "optimization", "styling"]:
-                    for item in review.get(category, []):
-                        if "suggestion" in item:
-                            item["suggestion"] = sanitize_ai_output(item["suggestion"])
-                        if "description" in item:
-                            item["description"] = sanitize_ai_output(item["description"])
-
-                # Store in combined results
-                combined_result["fileReviews"][file_path] = review
-
     combined_result["truncatedFiles"] = truncated_files
+    if diff_mode_header:
+        combined_result["diffModeInfo"] = {
+            "active": True,
+            "filesReviewed": len(files),
+            "filesSkipped": num_skipped,
+            "baseRef": request.baseRef,
+            "headRef": request.headRef
+        }
     return combined_result
 
 # 🟢 Route: AI Chat with Repository Context
@@ -782,8 +837,8 @@ Guidelines:
         return result
         
     except Exception as e:
-        print(f"❌ Groq Chat API Call Failed: {_redact_key(str(e), api_key)}")
-        raise HTTPException(status_code=500, detail=f"Groq API chat failed: {_redact_key(str(e), api_key)}")
+        print(f"❌ Groq Chat API Call Failed: {sanitize_error(str(e), api_key)}")
+        raise HTTPException(status_code=500, detail=f"Groq API chat failed: {sanitize_error(str(e), api_key)}")
 
 class DiffChange(BaseModel):
     line: int
@@ -903,7 +958,7 @@ If no issues are found, reply with: {{ "reviews": [] }}"""
                             "body": f"\n{sanitize_ai_output(comment_body)}"
                         })
         except Exception as e:
-            print(f"⚠️ Error reviewing file {file.path} on Groq: {_redact_key(str(e), api_key)}")
+            print(f"⚠️ Error reviewing file {file.path} on Groq: {sanitize_error(str(e), api_key)}")
             
     return {"comments": comments}
 
@@ -1024,5 +1079,5 @@ async def get_paginated_chunks(request: PaginatedChunksRequest):
 if __name__ == "__main__":
     import uvicorn
     reload_enabled = os.getenv("UVICORN_RELOAD", "false").lower() == "true"
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=reload_enabled)
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=reload_enabled, proxy_headers=True, forwarded_allow_ips="*")
 # TODO: Issue #395 - Bug [AI Engine]: `validate_system_prompt` fails to strip multiple occurrences of dangerous phrases

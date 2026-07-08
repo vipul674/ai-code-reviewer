@@ -151,3 +151,16 @@ def get_cache_stats() -> dict:
             "max_size": _MAX_CACHE_SIZE,
             "keys": list(_embedding_cache.keys()),
         }
+
+
+import asyncio
+
+
+async def async_embed_text(text: str) -> list[float]:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, embed_text, text)
+
+
+async def async_embed_texts(texts: list[str]) -> list[list[float]]:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, embed_texts, texts)

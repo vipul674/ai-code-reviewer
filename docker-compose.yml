@@ -9,13 +9,13 @@ services:
     environment:
       - IS_PERSISTENT=TRUE
       - ANONYMIZED_TELEMETRY=${ANONYMIZED_TELEMETRY:-FALSE}
-    restart: always
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
-      interval: 15s
+      test: ["CMD", "wget", "--spider", "http://localhost:8000/api/v1/health"]
+      interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 10s
+    restart: always
 
   ai-engine:
     build:
@@ -38,13 +38,13 @@ services:
     depends_on:
       chromadb:
         condition: service_healthy
-    restart: always
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 15s
+      test: ["CMD", "wget", "--spider", "http://localhost:8000/health"]
+      interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 10
+      start_period: 20s
+    restart: always
 
   backend:
     build:
@@ -68,13 +68,13 @@ services:
     depends_on:
       ai-engine:
         condition: service_healthy
-    restart: always
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health"]
-      interval: 15s
+      test: ["CMD", "wget", "--spider", "http://localhost:5000/health"]
+      interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 10
+      start_period: 20s
+    restart: always
 
   frontend:
     build:
@@ -92,12 +92,6 @@ services:
       backend:
         condition: service_healthy
     restart: always
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
 
 volumes:
   chroma_data:

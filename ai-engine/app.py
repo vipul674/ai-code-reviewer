@@ -281,6 +281,7 @@ RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_MAX_REQUESTS = 500
 MAX_RATE_LIMIT_ENTRIES = 10000
 _rate_limit_store: OrderedDict[str, list[float]] = OrderedDict()
+_rate_limit_lock = asyncio.Lock()
 
 async def rate_limit_middleware(request: Request, call_next):
     client_ip = (
@@ -290,19 +291,21 @@ async def rate_limit_middleware(request: Request, call_next):
     )
     now = time.time()
 
-    if client_ip in _rate_limit_store:
-        _rate_limit_store.move_to_end(client_ip)
-        window = _rate_limit_store[client_ip]
-    else:
-        if len(_rate_limit_store) >= MAX_RATE_LIMIT_ENTRIES:
-            _rate_limit_store.popitem(last=False)
-        window = []
-        _rate_limit_store[client_ip] = window
+    async with _rate_limit_lock:
+        if client_ip in _rate_limit_store:
+            _rate_limit_store.move_to_end(client_ip)
+            window = _rate_limit_store[client_ip]
+        else:
+            if len(_rate_limit_store) >= MAX_RATE_LIMIT_ENTRIES:
+                _rate_limit_store.popitem(last=False)
+            window = []
+            _rate_limit_store[client_ip] = window
 
-    window[:] = [t for t in window if now - t < RATE_LIMIT_WINDOW_SECONDS]
-    if len(window) >= RATE_LIMIT_MAX_REQUESTS:
-        return JSONResponse(status_code=429, content={"error": "Rate limit exceeded. Try again later."})
-    window.append(now)
+        window[:] = [t for t in window if now - t < RATE_LIMIT_WINDOW_SECONDS]
+        if len(window) >= RATE_LIMIT_MAX_REQUESTS:
+            return JSONResponse(status_code=429, content={"error": "Rate limit exceeded. Try again later."})
+        window.append(now)
+
     response = await call_next(request)
     return response
 

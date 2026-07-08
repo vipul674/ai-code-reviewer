@@ -31,12 +31,31 @@ function escapeHtmlPreserveBackticks(text: string): string {
     .replace(/`/g, "&#96;");
 }
 
+function formatInline(text: string): string {
+  let escaped = escapeHtmlPreserveBackticks(text);
+  
+  // bold
+  escaped = escaped.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+  
+  // italic
+  escaped = escaped.replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
+  
+  // links
+  escaped = escaped.replace(/\[(.*?)\]\((.*?)\)/g, "<a href=\"$2\">$1</a>");
+  
+  // code
+  escaped = escaped.replace(/&#96;([^&#96;]+)&#96;/g, "<code>$1</code>");
+  
+  return escaped;
+}
+
 export function renderMarkdown(md: string): string {
   const lines = md.split("\n");
   let html = "";
   let inCodeBlock = false;
   let codeBuffer: string[] = [];
   let codeLang = "";
+  let inTable = false;
 
   for (const line of lines) {
     if (line.trimStart().startsWith("```")) {
@@ -57,24 +76,43 @@ export function renderMarkdown(md: string): string {
       continue;
     }
 
+    const trimmed = line.trim();
+
+    if (inTable && !trimmed.startsWith("|")) {
+      html += "</table>";
+      inTable = false;
+    }
+
     if (line.startsWith("# ")) {
-      html += `<h1>${escapeHtml(line.slice(2))}</h1>`;
+      html += `<h1>${formatInline(line.slice(2))}</h1>`;
     } else if (line.startsWith("## ")) {
-      html += `<h2>${escapeHtml(line.slice(3))}</h2>`;
+      html += `<h2>${formatInline(line.slice(3))}</h2>`;
     } else if (line.startsWith("### ")) {
-      html += `<h3>${escapeHtml(line.slice(4))}</h3>`;
-    } else if (line.trim().startsWith("- ")) {
-      html += `<li>${escapeHtml(line.trim().slice(2))}</li>`;
-    } else if (line.trim() === "") {
+      html += `<h3>${formatInline(line.slice(4))}</h3>`;
+    } else if (trimmed.startsWith("- ")) {
+      html += `<li>${formatInline(trimmed.slice(2))}</li>`;
+    } else if (/^\d+\.\s+/.test(trimmed)) {
+      const match = trimmed.match(/^\d+\.\s+(.*)/);
+      html += `<li>${formatInline(match ? match[1] : "")}</li>`;
+    } else if (trimmed.startsWith("|")) {
+      if (!inTable) {
+        html += `<table>`;
+        inTable = true;
+      }
+      if (trimmed.includes("---")) {
+        continue;
+      }
+      const cells = trimmed.split("|").map(c => c.trim()).filter((c, i, arr) => !(c === "" && (i === 0 || i === arr.length - 1)));
+      html += `<tr>${cells.map(c => `<td>${formatInline(c)}</td>`).join("")}</tr>`;
+    } else if (trimmed === "") {
       html += `<div class="spacer"></div>`;
     } else {
-      const escaped = escapeHtmlPreserveBackticks(line);
-      const formatted = escaped.replace(
-        /&#96;([^&#96;]+)&#96;/g,
-        "<code>$1</code>"
-      );
-      html += `<p>${formatted}</p>`;
+      html += `<p>${formatInline(line)}</p>`;
     }
+  }
+
+  if (inTable) {
+    html += "</table>";
   }
 
   if (codeBuffer.length > 0) {
@@ -137,6 +175,10 @@ pre code {
   line-height: 1.5;
 }
 li { margin-left: 16px; margin-bottom: 4px; }
+table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+th, td { border: 1px solid var(--vscode-widget-border); padding: 4px 8px; text-align: left; }
+a { color: var(--vscode-textLink-foreground); text-decoration: none; }
+a:hover { text-decoration: underline; }
 .spacer { height: 6px; }
 .loading {
   display: flex;

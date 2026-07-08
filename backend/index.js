@@ -1365,9 +1365,26 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
       const shaDedupKey = `webhook:sha:${shaKey}`;
       let shaAlreadyReviewed;
       if (redisClient) {
-        shaAlreadyReviewed = await redisClient.sismember(shaDedupKey, headSha);
+        const added = await redisClient.sadd(shaDedupKey, headSha);
+        if (!added) {
+          shaAlreadyReviewed = 1;
+        } else {
+          shaAlreadyReviewed = 0;
+          await redisClient.expire(shaDedupKey, DELIVERY_REDIS_TTL);
+        }
       } else {
-        shaAlreadyReviewed = shaDedupMemoryMap.has(`${shaDedupKey}:${headSha}`) ? 1 : 0;
+        const mapKey = `${shaDedupKey}:${headSha}`;
+        shaAlreadyReviewed = shaDedupMemoryMap.has(mapKey) ? 1 : 0;
+        if (!shaAlreadyReviewed) {
+          // Enforce max size cap with oldest-entry eviction
+          if (shaDedupMemoryMap.size >= SHA_DEDUP_MAX_SIZE) {
+            const oldestKey = shaDedupMemoryMap.keys().next().value;
+            if (oldestKey !== undefined) {
+              shaDedupMemoryMap.delete(oldestKey);
+            }
+          }
+          shaDedupMemoryMap.set(mapKey, Date.now());
+        }
       }
       if (shaAlreadyReviewed) {
         console.log(`⏭️ Already reviewed commit ${headSha.substring(0,7)} for PR #${pullNumber}`);
@@ -1377,6 +1394,11 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
       console.log(`📡 GitHub Webhook received: PR #${pullNumber} ${action} (${headSha.substring(0,7)}) in ${owner}/${repo}`);
 
       if (reviewQueue._queues.size >= reviewQueue._maxQueues) {
+        if (redisClient) {
+          await redisClient.srem(shaDedupKey, headSha);
+        } else {
+          shaDedupMemoryMap.delete(`${shaDedupKey}:${headSha}`);
+        }
         return res.status(429).json({ error: 'Too many pending reviews. Try again later.' });
       }
 
@@ -1403,6 +1425,11 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
 
       if (currentCount > REPO_MAX_REQUESTS) {
         console.warn(`⚠️ Rate limit exceeded for repository ${repoKey}`);
+        if (redisClient) {
+          await redisClient.srem(shaDedupKey, headSha);
+        } else {
+          shaDedupMemoryMap.delete(`${shaDedupKey}:${headSha}`);
+        }
         return res.status(429).json({ error: 'Too many requests for this repository. Try again later.' });
       }
 
@@ -1418,22 +1445,13 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
           }
         }
       });
-      if (enqueuePromise) {
+      if (!enqueuePromise) {
+        // Revert dedup if enqueue failed synchronously
         if (redisClient) {
-          await redisClient.sadd(shaDedupKey, headSha);
-          await redisClient.expire(shaDedupKey, DELIVERY_REDIS_TTL);
+          await redisClient.srem(shaDedupKey, headSha);
         } else {
-          const mapKey = `${shaDedupKey}:${headSha}`;
-          // Enforce max size cap with oldest-entry eviction
-          if (shaDedupMemoryMap.size >= SHA_DEDUP_MAX_SIZE) {
-            const oldestKey = shaDedupMemoryMap.keys().next().value;
-            if (oldestKey !== undefined) {
-              shaDedupMemoryMap.delete(oldestKey);
-            }
-          }
-          shaDedupMemoryMap.set(mapKey, Date.now());
+          shaDedupMemoryMap.delete(`${shaDedupKey}:${headSha}`);
         }
-      } else {
         return res.status(429).json({ error: 'Review queue full. Try again later.' });
       }
     }

@@ -60,7 +60,8 @@ except (FileNotFoundError, json.JSONDecodeError, RuntimeError) as _e:
 def _neutralize_pattern(content: str, pattern: str) -> str:
     """Replace a dangerous pattern with a non-deterministic placeholder."""
     token = f"__NEUTRALIZED_{uuid.uuid4().hex[:8]}__"
-    return re.sub(re.escape(pattern), token, content, flags=re.IGNORECASE)
+    flexible_pattern = r"\s+".join(re.escape(w) for w in pattern.split())
+    return re.sub(flexible_pattern, token, content, flags=re.IGNORECASE)
 
 def sanitize_file_content(content: str) -> str:
     for _round in range(3):

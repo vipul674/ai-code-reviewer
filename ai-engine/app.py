@@ -16,7 +16,6 @@ from groq import Groq
 from dotenv import load_dotenv
 import bleach
 from bleach.css_sanitizer import CSSSanitizer
-import vectorstore
 from embeddings import is_fallback_active
 from diff_helper import get_changed_files_from_git, filter_files_by_changes, format_diff_header
 

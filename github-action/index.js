@@ -90,6 +90,23 @@ async function run() {
     const { files: parsedFiles } = parseDiff(diff);
     console.log(`📁 Found ${parsedFiles.length} files in PR diff.`);
 
+    // Detect when the PR diff is too large to fully review. Files beyond the
+    // limit are dropped, and the review must NOT be auto-approved (a partial
+    // review must never read as a clean approval of all changes).
+    const MAX_REVIEW_FILES = parseInt(core.getInput('max-review-files') || process.env.MAX_REVIEW_FILES || '50', 10);
+    let totalReviewableFiles = 0;
+    for (const file of parsedFiles) {
+      if (excludePatterns.some(regex => regex.test(file.path))) continue;
+      const ext = file.path.split('.').pop()?.toLowerCase();
+      if (!ext || !validExtensions.includes(ext)) continue;
+      if (file.changes.length === 0) continue;
+      totalReviewableFiles++;
+    }
+    const diffTruncated = totalReviewableFiles > MAX_REVIEW_FILES;
+    if (diffTruncated) {
+      core.warning(`WARNING: PR diff has ${totalReviewableFiles} reviewable files, exceeding the review limit of ${MAX_REVIEW_FILES}. Only the first ${MAX_REVIEW_FILES} will be reviewed; the PR will NOT be auto-approved.`);
+    }
+
     const commentsToPost = [];
     let reviewedFilesCount = 0;
     let successfulReviewsCount = 0;
@@ -116,6 +133,11 @@ async function run() {
 
       console.log(`🔍 Reviewing: ${file.path} (${file.changes.length} changes)`);
       reviewedFilesCount++;
+
+      if (reviewedFilesCount > MAX_REVIEW_FILES) {
+        core.warning(`Skipping remaining files beyond the review limit of ${MAX_REVIEW_FILES}.`);
+        break;
+      }
 
       // 1. Run local secrets scanner
       const { findings: localSecretIssues, truncated: scanTruncated, totalChanges: scanTotal, skippedReason: scanReason } = scanSecretsInChanges(file.changes);
@@ -250,7 +272,10 @@ Please review my feedback and suggestions below. Happy coding! 🚀
     } else if (reviewedFilesCount > 0 && successfulReviewsCount > 0) {
       console.log('🎉 No code issues or recommendations found in successful reviews. Posting review status...');
 
-      const reviewEvent = (autoApprove && failedReviewsCount === 0) ? 'APPROVE' : 'COMMENT';
+      const reviewEvent = (autoApprove && failedReviewsCount === 0 && !diffTruncated) ? 'APPROVE' : 'COMMENT';
+      const truncationWarning = diffTruncated
+        ? `\n\nWARNING: **Partial Review:** This PR exceeded the review limit of ${MAX_REVIEW_FILES} files (${totalReviewableFiles} reviewable). The remaining files were **not** analyzed, so this is **not** a full approval of all changes. Please review them manually or split the PR.`
+        : '';
       const issuesText = failedReviewsCount === 0 
         ? `🎉 Outstanding work! I have scanned the PR and found **0 issues**. Your changes look pristine, clean, and optimized! Approved! 🚀`
         : `⚠️ I have scanned **${successfulReviewsCount}** files and found **0 issues** in them. However, **${failedReviewsCount}** files could not be reviewed due to errors.`;
@@ -264,13 +289,13 @@ Please review my feedback and suggestions below. Happy coding! 🚀
 
 🧐 **I have professionally reviewed and checked all your changes** to ensure they meet our project's high quality standards.
 
-${issuesText}
+${issuesText}${truncationWarning}
 
 ---
 ⭐ **Support RepoSage!** If you find this AI helpful, please consider giving us a **Star** 🌟 on GitHub! Your support helps us win GSSoC '26 and grow professionally!`
       });
 
-      if (autoApprove && failedReviewsCount === 0) {
+      if (autoApprove && failedReviewsCount === 0 && !diffTruncated) {
         try {
           await octokit.rest.issues.addLabels({
             owner,

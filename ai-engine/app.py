@@ -1009,11 +1009,22 @@ async def review_diff(request: ReviewDiffRequest):
     files = request.files
     comments = []
 
+    # Cap the number of files reviewed per PR so a single oversized diff cannot
+    # silently leave files unreviewed without anyone noticing. Files beyond the
+    # limit are dropped and reported via the `truncated` flag so the caller does
+    # not mark the PR as fully approved.
+    MAX_REVIEW_DIFF_FILES = int(os.getenv("MAX_REVIEW_DIFF_FILES", "50"))
+    total_files = len(files)
+    truncated = total_files > MAX_REVIEW_DIFF_FILES
+    files_to_review = files[:MAX_REVIEW_DIFF_FILES]
+    if truncated:
+        print(f"⚠️ review-diff truncated: reviewing {len(files_to_review)} of {total_files} files")
+
     groq_model = get_groq_model(request.model)
 
     print(f"📡 Forwarding PR diff reviews to Groq using model: {groq_model}")
 
-    for file in files:
+    for file in files_to_review:
         if len(file.changes) == 0:
             continue
         
@@ -1090,8 +1101,17 @@ If no issues are found, reply with: {{ "reviews": [] }}"""
                         })
         except Exception as e:
             print(f"⚠️ Error reviewing file {file.path} on Groq: {sanitize_error(str(e), api_key)}")
-            
-    return {"comments": comments}
+
+    result = {"comments": comments}
+    if truncated:
+        result["truncated"] = True
+        result["files_reviewed"] = len(files_to_review)
+        result["files_total"] = total_files
+        result["warning"] = (
+            f"PR diff exceeded the review limit; only {len(files_to_review)} of "
+            f"{total_files} files were analyzed. This is a partial review."
+        )
+    return result
 
 class SplitRequest(BaseModel):
     files: List[FileItem]

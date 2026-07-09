@@ -199,7 +199,7 @@ def delete_repo_chunks(repo_url: str) -> int:
     collection = _get_collection(repo_url)
     total = 0
     while True:
-        batch = collection.get(limit=_MAX_INGEST_CHUNKS)
+        batch = collection.get(limit=_MAX_INGEST_CHUNKS, include=[])
         ids = batch.get("ids", [])
         if not ids:
             break

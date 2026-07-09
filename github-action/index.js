@@ -219,6 +219,7 @@ If no issues are found, reply with: { "reviews": [] }`;
     // 6. Post Consolidated Review
     if (commentsToPost.length > 0) {
       console.log(`✍️ Posting PR Review with ${commentsToPost.length} inline comments...`);
+      try {
       await octokit.rest.pulls.createReview({
         owner,
         repo,
@@ -238,6 +239,24 @@ Please review my feedback and suggestions below. Happy coding! 🚀
 ⭐ **Support RepoSage!** If you find this AI helpful, please consider giving us a **Star** 🌟 on GitHub! Your support helps us win GSSoC '26 and grow professionally!`,
         comments: commentsToPost
       });
+      } catch (err) {
+        core.warning(`⚠️ Batched review creation failed (${err.message}); retrying comments individually and skipping invalid ones.`);
+        for (const comment of commentsToPost) {
+          try {
+            await octokit.rest.pulls.createReview({
+              owner,
+              repo,
+              pull_number: pullNumber,
+              event: 'COMMENT',
+              body: 'RepoSage AI Code Review Audit (individual comment retry)',
+              comments: [comment]
+            });
+          } catch (commentErr) {
+            core.warning(`⚠️ Skipping invalid inline comment on ${comment.path}:${comment.line} — ${commentErr.message}`);
+          }
+        }
+      }
+
     } else if (incompleteSecretScan) {
       console.log('Secret scan was incomplete. Posting warning review instead of approving.');
       await octokit.rest.pulls.createReview({

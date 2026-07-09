@@ -1774,16 +1774,39 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
       }
       body += `I have audited the code changes in this Pull Request and generated **${commentsToPost.length} actionable inline suggestion${commentsToPost.length === 1 ? '' : 's'}**.\n\nPlease review my feedback and suggestions below. Happy coding! ≡ƒÜÇ`;
 
-      const { data: createdReview } = await octokit.rest.pulls.createReview({
-        owner,
-        repo,
-        pull_number: pullNumber,
-        commit_id: headSha,
-        event: 'COMMENT',
-        body,
-        comments: batch
-      });
-      postedReviewIds.push(createdReview.id);
+      // Wrap review creation so a single malformed/stale inline comment does
+      // not abort the entire PR review. On failure, retry each comment
+      // individually and skip any that GitHub rejects.
+      try {
+        const { data: createdReview } = await octokit.rest.pulls.createReview({
+          owner,
+          repo,
+          pull_number: pullNumber,
+          commit_id: headSha,
+          event: 'COMMENT',
+          body,
+          comments: batch
+        });
+        postedReviewIds.push(createdReview.id);
+      } catch (reviewErr) {
+        console.warn(`⚠️ Batched review creation failed (${reviewErr.message}); retrying comments individually and skipping invalid ones.`);
+        for (const comment of batch) {
+          try {
+            const { data: singleReview } = await octokit.rest.pulls.createReview({
+              owner,
+              repo,
+              pull_number: pullNumber,
+              commit_id: headSha,
+              event: 'COMMENT',
+              body: `## 🛡️ RepoSage AI Code Review Audit Completed!\n\n${body}`,
+              comments: [comment]
+            });
+            postedReviewIds.push(singleReview.id);
+          } catch (commentErr) {
+            console.warn(`⚠️ Skipping invalid inline comment on ${comment.path}:${comment.line} — ${commentErr.message}`);
+          }
+        }
+      }
     }
   } else if (aiCommentsDiscarded > 0) {
     console.warn(`ΓÜá∩╕Å ${aiCommentsDiscarded} AI comments were discarded due to line number mismatches ΓÇö posting COMMENT review instead of approving.`);

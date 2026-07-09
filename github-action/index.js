@@ -94,6 +94,7 @@ async function run() {
     let reviewedFilesCount = 0;
     let successfulReviewsCount = 0;
     let failedReviewsCount = 0;
+    let emptyOrUnparseable = false;
 
     for (const file of parsedFiles) {
       const isExcluded = excludePatterns.some(regex => regex.test(file.path));
@@ -170,6 +171,9 @@ If no issues are found, reply with: { "reviews": [] }`;
         });
 
         const content = completion.choices[0].message.content;
+        if (!content || typeof content !== 'string' || !content.trim()) {
+          emptyOrUnparseable = true;
+        }
         let parsed = cleanAndParseJSON(content);
         successfulReviewsCount++;
         
@@ -204,6 +208,10 @@ If no issues are found, reply with: { "reviews": [] }`;
             }
           }
         } else {
+          const hasReviewsArray = parsed && typeof parsed === 'object' && Array.isArray(parsed.reviews);
+          if (!hasReviewsArray) {
+            emptyOrUnparseable = true;
+          }
           console.warn(`⚠️ Warning: Expected array from AI response, got something else for ${file.path}. Parsed keys: ${Object.keys(parsed || {}).join(', ')}`);
         }
 
@@ -236,9 +244,12 @@ Please review my feedback and suggestions below. Happy coding! 🚀
     } else if (reviewedFilesCount > 0 && successfulReviewsCount > 0) {
       console.log('🎉 No code issues or recommendations found in successful reviews. Posting review status...');
 
-      const reviewEvent = (autoApprove && failedReviewsCount === 0) ? 'APPROVE' : 'COMMENT';
-      const issuesText = failedReviewsCount === 0 
-        ? `🎉 Outstanding work! I have scanned the PR and found **0 issues**. Your changes look pristine, clean, and optimized! Approved! 🚀`
+      const canApprove = autoApprove && failedReviewsCount === 0 && !emptyOrUnparseable;
+      const reviewEvent = canApprove ? 'APPROVE' : 'COMMENT';
+      const issuesText = failedReviewsCount === 0
+        ? (emptyOrUnparseable
+            ? `⚠️ The AI review returned an empty or unparseable response for some files (${successfulReviewsCount} attempted). No automatic approval was granted — please review this PR manually.`
+            : `🎉 Outstanding work! I have scanned the PR and found **0 issues**. Your changes look pristine, clean, and optimized! Approved! 🚀`)
         : `⚠️ I have scanned **${successfulReviewsCount}** files and found **0 issues** in them. However, **${failedReviewsCount}** files could not be reviewed due to errors.`;
         
       await octokit.rest.pulls.createReview({
@@ -256,7 +267,7 @@ ${issuesText}
 ⭐ **Support RepoSage!** If you find this AI helpful, please consider giving us a **Star** 🌟 on GitHub! Your support helps us win GSSoC '26 and grow professionally!`
       });
 
-      if (autoApprove && failedReviewsCount === 0) {
+      if (autoApprove && failedReviewsCount === 0 && !emptyOrUnparseable) {
         try {
           await octokit.rest.issues.addLabels({
             owner,

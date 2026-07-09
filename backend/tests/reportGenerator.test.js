@@ -17,15 +17,15 @@ test('reportGenerator: SCHEMA_VERSION is exported and is a non-empty string', ()
 });
 
 test('reportGenerator: getReportPath returns correct extension for json format', () => {
-  const result = getReportPath('json', '/tmp');
+  const result = getReportPath('json', TMPDIR);
   assert.ok(result.endsWith('.json'), 'json format should return .json extension');
-  assert.ok(result.includes('/tmp'));
+  assert.ok(result.includes(TMPDIR));
 });
 
 test('reportGenerator: getReportPath returns correct extension for html format', () => {
-  const result = getReportPath('html', '/tmp');
+  const result = getReportPath('html', TMPDIR);
   assert.ok(result.endsWith('.html'), 'html format should return .html extension');
-  assert.ok(result.includes('/tmp'));
+  assert.ok(result.includes(TMPDIR));
 });
 
 test('reportGenerator: getReportPath defaults to json when format is unknown', () => {

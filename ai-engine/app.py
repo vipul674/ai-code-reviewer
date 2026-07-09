@@ -1,5 +1,6 @@
 import sys
 import os
+import html
 import json
 import re
 import time
@@ -178,14 +179,31 @@ css_sanitizer = CSSSanitizer(allowed_css_properties=[
     'font-family', 'text-anchor', 'color', 'background', 'background-color',
 ])
 
+_KNOWN_GROQ_MODELS = {
+    "llama-3.3-70b-versatile": "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant": "llama-3.1-8b-instant",
+    "llama-3.1-70b-versatile": "llama-3.1-70b-versatile",
+    "deepseek-r1-distill-llama-70b": "deepseek-r1-distill-llama-70b",
+    "gemma2-9b-it": "gemma2-9b-it",
+}
+
 def get_groq_model(model_name: Optional[str]) -> str:
     default_model = "llama-3.3-70b-versatile"
     if not model_name:
         return default_model
     req_model = model_name.lower()
+    # Exact match first so valid model ids are never mis-routed by substring.
+    if req_model in _KNOWN_GROQ_MODELS:
+        return _KNOWN_GROQ_MODELS[req_model]
+    # Anchored family fallback (avoid bare substring over-matching, e.g.
+    # "llama-3.1-70b-versatile" must not be downgraded to the 8B model).
     if "deepseek" in req_model:
         return "deepseek-r1-distill-llama-70b"
-    if "llama-3.1" in req_model or "8b" in req_model:
+    if req_model.startswith("llama-3.1-70b"):
+        return "llama-3.1-70b-versatile"
+    if req_model.startswith("llama-3.1-8b") or "8b-instant" in req_model:
+        return "llama-3.1-8b-instant"
+    if req_model.startswith("llama-3.1"):
         return "llama-3.1-8b-instant"
     if "gemma" in req_model:
         return "gemma2-9b-it"
@@ -228,7 +246,7 @@ def sanitize_ai_output(text: str) -> str:
     )
 
     for placeholder, original in placeholders.items():
-        text = text.replace(placeholder, original)
+        text = text.replace(placeholder, html.escape(original))
 
     return text
 
@@ -318,8 +336,7 @@ async def global_exception_handler(request, exc):
 
 
 def verify_api_key(x_api_key: str = Header(None)):
-    expected_key = os.getenv("API_KEY")
-    if expected_key and x_api_key != expected_key:
+    if API_KEY and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
 # Restrict CORS to configured origins so the AI engine is not accessible from
@@ -861,7 +878,7 @@ async def chat_with_repository(request: ChatRequest):
                 chunk_parts = []
                 for i, c in enumerate(rag_chunks, 1):
                     meta = c.get("metadata", {})
-                    source = meta.get("file_path", meta.get("source", "unknown"))
+                    source = meta.get("source_file", meta.get("fileName", "unknown"))
                     chunk_parts.append(f"[Chunk {i} from {source}]\n{c['content']}")
                     rag_sources.append({
                         "chunk_id": c.get("chunk_id"),
@@ -915,7 +932,7 @@ Guidelines:
             role = "user"
         messages.append({
             "role": role,
-            "content": h.get("content", "")
+            "content": sanitize_ai_output(h.get("content", ""))
         })
         
     # Append current user question
@@ -937,7 +954,10 @@ Guidelines:
         if rag_sources:
             result["sources"] = rag_sources
         elif request.rag_sources:
-            result["sources"] = request.rag_sources
+            result["sources"] = [
+                {**s, "source": sanitize_ai_output(str(s.get("source", "")))}
+                for s in request.rag_sources
+            ]
         if request.useRag and is_fallback_active():
             result["_rag_warning"] = "Embedding model is using deterministic fallback. RAG results may be inaccurate."
         return result
@@ -989,11 +1009,22 @@ async def review_diff(request: ReviewDiffRequest):
     files = request.files
     comments = []
 
+    # Cap the number of files reviewed per PR so a single oversized diff cannot
+    # silently leave files unreviewed without anyone noticing. Files beyond the
+    # limit are dropped and reported via the `truncated` flag so the caller does
+    # not mark the PR as fully approved.
+    MAX_REVIEW_DIFF_FILES = int(os.getenv("MAX_REVIEW_DIFF_FILES", "50"))
+    total_files = len(files)
+    truncated = total_files > MAX_REVIEW_DIFF_FILES
+    files_to_review = files[:MAX_REVIEW_DIFF_FILES]
+    if truncated:
+        print(f"⚠️ review-diff truncated: reviewing {len(files_to_review)} of {total_files} files")
+
     groq_model = get_groq_model(request.model)
 
     print(f"📡 Forwarding PR diff reviews to Groq using model: {groq_model}")
 
-    for file in files:
+    for file in files_to_review:
         if len(file.changes) == 0:
             continue
         
@@ -1058,15 +1089,29 @@ If no issues are found, reply with: {{ "reviews": [] }}"""
                     line_num = issue.get("line")
                     comment_body = issue.get("comment")
                     if line_num and comment_body:
+                        try:
+                            line_int = int(float(line_num))
+                        except (TypeError, ValueError):
+                            print(f"⚠️ Skipping review item for {file.path} with invalid line number: {line_num!r}")
+                            continue
                         comments.append({
                             "path": file.path,
-                            "line": int(line_num),
+                            "line": line_int,
                             "body": f"\n{sanitize_ai_output(comment_body)}"
                         })
         except Exception as e:
             print(f"⚠️ Error reviewing file {file.path} on Groq: {sanitize_error(str(e), api_key)}")
-            
-    return {"comments": comments}
+
+    result = {"comments": comments}
+    if truncated:
+        result["truncated"] = True
+        result["files_reviewed"] = len(files_to_review)
+        result["files_total"] = total_files
+        result["warning"] = (
+            f"PR diff exceeded the review limit; only {len(files_to_review)} of "
+            f"{total_files} files were analyzed. This is a partial review."
+        )
+    return result
 
 class SplitRequest(BaseModel):
     files: List[FileItem]

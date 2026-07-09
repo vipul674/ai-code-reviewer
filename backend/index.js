@@ -1699,6 +1699,8 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
   // Track whether the AI engine was successfully queried
   let aiEngineQueried = false;
   let aiCommentsDiscarded = 0;
+  // Set when the AI engine dropped files because the diff exceeded its review limit
+  let reviewDiffTruncated = false;
 
   if (filesToReview.length > 0) {
     console.log(`≡ƒºá Querying AI engine for ${filesToReview.length} files...`);
@@ -1737,6 +1739,10 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
             console.warn(`ΓÜá∩╕Å ${aiCommentsDiscarded} AI comments could not be posted due to line number mismatches with the diff`);
           }
           aiEngineQueried = true;
+          if (result && result.truncated) {
+            reviewDiffTruncated = true;
+            console.warn(`⚠️ AI engine review-diff was truncated: ${result.warning || (result.files_reviewed + ' of ' + result.files_total + ' files reviewed')}`);
+          }
         } else {
           console.warn('ΓÜá∩╕Å AI engine returned HTTP 200 with empty or malformed response body ΓÇö not treating as a clean analysis');
         }
@@ -1835,7 +1841,22 @@ The AI engine identified **${aiCommentsDiscarded} potential issue(s)** but could
 
 The AI engine could not be reached or returned an unexpected response during this review. The secrets scanner found **0 issues**, but the PR was **not** fully reviewed by the AI.
 
-Please ensure the AI Engine service is running correctly and re-trigger the review for a complete analysis.`
+      Please ensure the AI Engine service is running correctly and re-trigger the review for a complete analysis.`
+    });
+    postedReviewIds.push(createdReview.id);
+  } else if (reviewDiffTruncated) {
+    console.warn('⚠️ PR diff was truncated during review — posting COMMENT review instead of approving to avoid a false approval on un-reviewed files.');
+    const { data: createdReview } = await octokit.rest.pulls.createReview({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      commit_id: headSha,
+      event: 'COMMENT',
+      body: `## ⚠️ RepoSage AI Code Review — Partial Review
+
+The PR diff was too large to fully review by the AI engine. Some files were **not** analyzed, so this PR was **not** approved automatically.
+
+**Action required:** Please manually review the remaining files, or split this PR into smaller changes for a complete automated review.`
     });
     postedReviewIds.push(createdReview.id);
   } else {

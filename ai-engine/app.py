@@ -932,7 +932,7 @@ Guidelines:
             role = "user"
         messages.append({
             "role": role,
-            "content": h.get("content", "")
+            "content": sanitize_ai_output(h.get("content", ""))
         })
         
     # Append current user question
@@ -954,7 +954,10 @@ Guidelines:
         if rag_sources:
             result["sources"] = rag_sources
         elif request.rag_sources:
-            result["sources"] = request.rag_sources
+            result["sources"] = [
+                {**s, "source": sanitize_ai_output(str(s.get("source", "")))}
+                for s in request.rag_sources
+            ]
         if request.useRag and is_fallback_active():
             result["_rag_warning"] = "Embedding model is using deterministic fallback. RAG results may be inaccurate."
         return result

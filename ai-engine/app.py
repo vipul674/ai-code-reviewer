@@ -318,8 +318,7 @@ async def global_exception_handler(request, exc):
 
 
 def verify_api_key(x_api_key: str = Header(None)):
-    expected_key = os.getenv("API_KEY")
-    if expected_key and x_api_key != expected_key:
+    if API_KEY and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
 # Restrict CORS to configured origins so the AI engine is not accessible from

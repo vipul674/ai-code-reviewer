@@ -130,7 +130,16 @@ const exportLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   store: redisClient ? new RedisStore({ sendCommand: (...args) => redisClient.call(...args) }) : undefined,
-  message: { error: 'Too many export requests. Please slow down and retry after 1 minute.' }
+  message: { error: 'Too many HTML export requests. Please slow down and retry after 1 minute.' }
+});
+
+const pdfExportLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: redisClient ? new RedisStore({ sendCommand: (...args) => redisClient.call(...args) }) : undefined,
+  message: { error: 'Too many PDF export requests. Please slow down and retry after 1 minute.' }
 });
 
 // Parse cookies for CSRF token validation
@@ -774,7 +783,7 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
 
       // 3. Inject Regex-based Secret Detections & Complexity Metrics into the analysis result
       if (reviewResult && reviewResult.fileReviews) {
-        reviewResult.metrics = {};
+        if (!reviewResult.metrics) reviewResult.metrics = {};
         
         files.forEach(file => {
           // Calculate complexity metrics
@@ -1159,7 +1168,7 @@ app.post('/api/analyze-file', requireApiKey, requireJsonContentType, analyzeLimi
     }
 
     if (reviewResult && reviewResult.fileReviews) {
-      reviewResult.metrics = {};
+      if (!reviewResult.metrics) reviewResult.metrics = {};
       files.forEach(file => {
         reviewResult.metrics[file.name] = analyzeComplexity(file.content, file.name);
         const secretFindings = scanSecrets(file.content);
@@ -2029,7 +2038,7 @@ app.post('/api/reports/html', requireApiKey, exportLimiter, (req, res) => {
 });
 
 // ≡ƒƒó Route: Export Review Report to PDF
-app.post('/api/reports/pdf', requireApiKey, exportLimiter, (req, res) => {
+app.post('/api/reports/pdf', requireApiKey, pdfExportLimiter, (req, res) => {
   const { repoName, analysis } = req.body;
   if (!repoName || !analysis) {
     return res.status(400).json({ error: 'Repository name and analysis result are required.' });

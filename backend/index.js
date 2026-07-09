@@ -1676,6 +1676,7 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
   const commentsToPost = [];
   const filesToReview = [];
   const validChangedLines = new Map();
+  let incompleteSecretScan = false;
 
   for (const file of parsedFiles) {
     // Check if file is supported
@@ -1696,6 +1697,7 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
       });
     });
     if (scanTruncated) {
+      incompleteSecretScan = true;
       console.warn(`⚠️ Secrets scan truncated for ${file.path}: ${scanReason} (total ${scanTotal} changes)`);
     }
 
@@ -1818,11 +1820,18 @@ The AI engine identified **${aiCommentsDiscarded} potential issue(s)** but could
       pull_number: pullNumber,
       commit_id: headSha,
       event: 'COMMENT',
-      body: `## ⚠️ RepoSage AI Code Review — AI Engine Issue
-
-The AI engine could not be reached or returned an unexpected response during this review. The secrets scanner found **0 issues**, but the PR was **not** fully reviewed by the AI.
-
-Please ensure the AI Engine service is running correctly and re-trigger the review for a complete analysis.`
+      body: `## ⚠️ RepoSage AI Code Review — AI Engine Issue\n\nThe AI engine could not be reached or returned an unexpected response during this review. The secrets scanner found **0 issues**, but the PR was **not** fully reviewed by the AI.\n\nPlease ensure the AI Engine service is running correctly and re-trigger the review for a complete analysis.`
+    });
+    postedReviewIds.push(createdReview.id);
+  } else if (incompleteSecretScan) {
+    console.log('Secret scan was incomplete. Posting COMMENT review instead of approving.');
+    const { data: createdReview } = await octokit.rest.pulls.createReview({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      commit_id: headSha,
+      event: 'COMMENT',
+      body: `## RepoSage Secret Scan Incomplete\n\nThe local secret scanner stopped before processing all changed lines. No approval was posted because hardcoded credentials may exist in the unscanned portion of this Pull Request.\n\nPlease split the PR or raise the configured scan limits and rerun the review.`
     });
     postedReviewIds.push(createdReview.id);
   } else {

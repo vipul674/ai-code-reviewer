@@ -94,6 +94,7 @@ async function run() {
     let reviewedFilesCount = 0;
     let successfulReviewsCount = 0;
     let failedReviewsCount = 0;
+    let incompleteSecretScan = false;
 
     for (const file of parsedFiles) {
       const isExcluded = excludePatterns.some(regex => regex.test(file.path));
@@ -126,6 +127,7 @@ async function run() {
         });
       }
       if (scanTruncated) {
+        incompleteSecretScan = true;
         console.warn(`⚠️ Secrets scan truncated for ${file.path}: ${scanReason} (total ${scanTotal} changes)`);
       }
 
@@ -227,11 +229,22 @@ If no issues are found, reply with: { "reviews": [] }`;
 
 I have audited **${reviewedFilesCount} code files** in this Pull Request and generated **${commentsToPost.length} actionable inline suggestions**. 
 
+${incompleteSecretScan ? 'Warning: One or more changed files exceeded the configured secret scan limits. Please split the PR or raise the scan limits and rerun before merging.\\n\\n' : ''}
+
 Please review my feedback and suggestions below. Happy coding! 🚀
 
 ---
 ⭐ **Support RepoSage!** If you find this AI helpful, please consider giving us a **Star** 🌟 on GitHub! Your support helps us win GSSoC '26 and grow professionally!`,
         comments: commentsToPost
+      });
+    } else if (incompleteSecretScan) {
+      console.log('Secret scan was incomplete. Posting warning review instead of approving.');
+      await octokit.rest.pulls.createReview({
+        owner,
+        repo,
+        pull_number: pullNumber,
+        event: 'COMMENT',
+        body: `## RepoSage Secret Scan Incomplete\n\nThe local secret scanner stopped before processing all changed lines. No approval was posted because hardcoded credentials may exist in the unscanned portion of this Pull Request.\n\nPlease split the PR or raise the configured scan limits and rerun the review.`
       });
     } else if (reviewedFilesCount > 0 && successfulReviewsCount > 0) {
       console.log('🎉 No code issues or recommendations found in successful reviews. Posting review status...');

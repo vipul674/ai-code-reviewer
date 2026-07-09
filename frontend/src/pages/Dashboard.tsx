@@ -1046,7 +1046,7 @@ export default function Dashboard() {
       try {
         const sanitized = updatedHistory.map((entry) => sanitizeAuditEntry(entry as unknown as Record<string, unknown>));
         localStorage.setItem('reposage_audit_history', JSON.stringify(sanitized));
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (e instanceof DOMException && e.name === 'QuotaExceededError') {
           console.warn('localStorage quota exceeded — audit history not saved.');
         } else {

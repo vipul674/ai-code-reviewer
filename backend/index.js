@@ -58,6 +58,7 @@ const ALLOWED_ANALYSIS_MODELS = ["llama-3.3-70b-versatile", "deepseek-r1-distill
 // Initialize analysis cache with configurable TTL (default: 1 hour)
 const ANALYSIS_CACHE_TTL_MS = ((n) => Number.isFinite(n) && n > 0 ? n : 60)(parseInt(process.env.ANALYSIS_CACHE_TTL_MINUTES || '60', 10)) * 60 * 1000;
 const analysisCache = new AnalysisCache(ANALYSIS_CACHE_TTL_MS);
+const responseCache = new AnalysisCache(ANALYSIS_CACHE_TTL_MS);
 
 // Trust the first hop of reverse proxy headers (Render, Railway, Heroku, Nginx, AWS ALB, etc.)
 // so that req.ip and express-rate-limit resolve the real client IP from X-Forwarded-For
@@ -656,6 +657,36 @@ app.post('/api/analyze', requireApiKey, requireJsonContentType, analyzeLimiter, 
   const uniqueId = crypto.randomUUID();
   const clonePath = path.join(tempReposDir, `${repoName}_${uniqueId}`);
 
+  // Fetch commit SHA to check response cache before cloning
+  let commitSha = null;
+  try {
+    const git = simpleGit({ timeout: { block: 10000 } });
+    const remoteInfo = await git.listRemote([repoUrl, 'HEAD']);
+    if (remoteInfo) {
+      commitSha = remoteInfo.split('\t')[0].trim();
+    }
+  } catch (err) {
+    console.warn(`⚠️ Failed to fetch remote HEAD for ${repoUrl}: ${err.message}`);
+  }
+
+  const finalCacheKey = commitSha ? crypto.createHash('sha256').update(`${repoUrl}|${commitSha}|${model}|${language}|${company}|${validatedPrompt}|${temperature}|${maxTokens}|${batchSize}`).digest('hex') : null;
+
+  if (finalCacheKey) {
+    const cachedResponse = responseCache.get(finalCacheKey);
+    if (cachedResponse) {
+      console.log(`🎯 Using cached final response for ${repoUrl} at ${commitSha}`);
+      if (cachedResponse.sessionPersisted && cachedResponse.csrfToken) {
+        res.cookie(CSRF_COOKIE_NAME, cachedResponse.csrfToken, {
+          httpOnly: true,
+          sameSite: 'strict',
+          path: '/',
+          secure: process.env.NODE_ENV === 'production',
+        });
+      }
+      return res.json(cachedResponse);
+    }
+  }
+
   console.log(`🚀 Cloning: ${repoUrl} into ${clonePath}`);
 
   // Clone repo using simple-git to prevent shell injection and handle timeouts
@@ -1032,7 +1063,7 @@ if (reviewResult?.fileReviews) {
       }
 
       // 8. Return result
-      return res.json({ ...(sessionPersisted ? { csrfToken } : {}),
+      const responseObject = { ...(sessionPersisted ? { csrfToken } : {}),
   success: true,
 
   repoName,
@@ -1060,7 +1091,13 @@ if (reviewResult?.fileReviews) {
   ...(fileWarnings.length > 0
       ? { warnings: fileWarnings }
       : {})
-});
+};
+
+      if (finalCacheKey && !reviewResult?._mock) {
+        responseCache.set(finalCacheKey, responseObject, repoUrl);
+      }
+
+      return res.json(responseObject);
 
     } catch (err) {
       console.error(err);

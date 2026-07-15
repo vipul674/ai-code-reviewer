@@ -12,6 +12,7 @@ interface FileReview {
   styling: ReviewItem[];
 }
 
+// @ts-ignore
 import html2pdf from 'html2pdf.js';
 
 interface AnalysisData {

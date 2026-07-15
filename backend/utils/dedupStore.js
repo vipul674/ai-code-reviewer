@@ -142,6 +142,7 @@ class DedupStore {
         }
       }
     }, intervalMs);
+    if (this._sweeper.unref) this._sweeper.unref();
   }
 
   stopSweeper() {

@@ -1398,34 +1398,27 @@ app.post('/api/webhook', webhookLimiter, async (req, res) => {
         return res.status(429).json({ error: 'Too many requests for this repository. Try again later.' });
       }
 
-      const enqueuePromise = reviewQueue.enqueue(reviewKey, { owner, repo, pullNumber, headSha }, async (item) => {
+      const enqueueResult = await reviewQueue.enqueue(reviewKey, { owner, repo, pullNumber, headSha, shaDedupKey }, async (item) => {
         try {
           await runWebhookReview(item.owner, item.repo, item.pullNumber, item.headSha);
+          if (redisClient) {
+            await redisClient.sadd(shaDedupKey, headSha);
+            await redisClient.expire(shaDedupKey, DELIVERY_REDIS_TTL);
+          } else {
+            const mapKey = `${shaDedupKey}:${headSha}`;
+            if (shaDedupMemoryMap.size >= SHA_DEDUP_MAX_SIZE) {
+              const oldestKey = shaDedupMemoryMap.keys().next().value;
+              if (oldestKey !== undefined) {
+                shaDedupMemoryMap.delete(oldestKey);
+              }
+            }
+            shaDedupMemoryMap.set(mapKey, Date.now());
+          }
         } catch (error) {
           console.error(`❌ Webhook review failed for ${headSha}:`, error.message);
-          if (redisClient) {
-            await redisClient.srem(shaDedupKey, headSha);
-          } else {
-            shaDedupMemoryMap.delete(`${shaDedupKey}:${headSha}`);
-          }
         }
       });
-      if (enqueuePromise) {
-        if (redisClient) {
-          await redisClient.sadd(shaDedupKey, headSha);
-          await redisClient.expire(shaDedupKey, DELIVERY_REDIS_TTL);
-        } else {
-          const mapKey = `${shaDedupKey}:${headSha}`;
-          // Enforce max size cap with oldest-entry eviction
-          if (shaDedupMemoryMap.size >= SHA_DEDUP_MAX_SIZE) {
-            const oldestKey = shaDedupMemoryMap.keys().next().value;
-            if (oldestKey !== undefined) {
-              shaDedupMemoryMap.delete(oldestKey);
-            }
-          }
-          shaDedupMemoryMap.set(mapKey, Date.now());
-        }
-      } else {
+      if (enqueueResult === false) {
         return res.status(429).json({ error: 'Review queue full. Try again later.' });
       }
     }

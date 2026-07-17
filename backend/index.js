@@ -1523,6 +1523,13 @@ async function runWebhookReview(owner, repo, pullNumber, headSha) {
   });
   if (headSha && pullRequest.head.sha !== headSha) {
     console.log(`⏭️ Skipping stale review ${headSha.substring(0, 7)}; current head is ${pullRequest.head.sha.substring(0, 7)}.`);
+    await octokit.rest.pulls.createReview({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      event: 'COMMENT',
+      body: `## ⏭️ RepoSage Review — Superseded\n\nThis review was for commit \`${headSha.substring(0, 7)}\`, but the PR head has moved to \`${pullRequest.head.sha.substring(0, 7)}\`. A new review will be triggered automatically. Superseding this review to avoid confusion.\n\n_RepoSage AI Code Review_`
+    });
     return;
   }
 

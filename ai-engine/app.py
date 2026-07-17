@@ -445,6 +445,32 @@ def health_check():
     }
 
 # 🟢 Route: Analyze Code Files and Generate Reviews & README
+def _merge_review(combined, file_path, review, batch_idx):
+    for category in ["bugs", "security", "optimization", "styling"]:
+        for item in review.get(category, []):
+            if "suggestion" in item:
+                item["suggestion"] = sanitize_ai_output(item["suggestion"])
+            if "description" in item:
+                item["description"] = sanitize_ai_output(item["description"])
+    if file_path in combined["fileReviews"]:
+        print(f"WARNING: Merging findings for {file_path} from batch {batch_idx + 1} (already exists from a previous batch)")
+        existing = combined["fileReviews"][file_path]
+        for category in ["bugs", "security", "optimization", "styling"]:
+            existing_items = existing.get(category, [])
+            new_items = review.get(category, [])
+            seen = set()
+            for item in existing_items:
+                key = (item.get("type", ""), item.get("line", ""), item.get("description", ""))
+                seen.add(key)
+            for item in new_items:
+                key = (item.get("type", ""), item.get("line", ""), item.get("description", ""))
+                if key not in seen:
+                    existing_items.append(item)
+                    seen.add(key)
+            existing[category] = existing_items
+    else:
+        combined["fileReviews"][file_path] = review
+
 @app.post("/analyze")
 async def analyze_repository(request: AnalyzeRequest):
     if not groq_client:
@@ -543,8 +569,9 @@ Here is the contents of files for this batch:
 You MUST reply ONLY in a valid JSON format. Do not write markdown wrapping, do not write explanations before or after.
 Format your JSON precisely as:
 {{
-  "fileReviews": {{
-    "file_path_1": {{
+  "fileReviews": [
+    {{
+      "filePath": "actual_file_path_here",
       "bugs": [
         {{ "type": "bug name", "line": 12, "description": "...", "suggestion": "..." }}
       ],
@@ -558,7 +585,7 @@ Format your JSON precisely as:
         {{ "type": "convention issue", "line": 15, "description": "...", "suggestion": "..." }}
       ]
     }}
-  }},
+  ],
   "generatedReadme": "Write a highly detailed, professional README.md markdown for the entire repository, outlining installation, folder structure, features, tech stack, and usage guidelines.",
   "mermaidDiagram": "graph TD\\n  A[\\\"Entry Point\\\"] --> B[\\\"Module\\\"]"
 }}
@@ -579,8 +606,9 @@ Here is the contents of files for this batch:
 You MUST reply ONLY in a valid JSON format. Do not write markdown wrapping, do not write explanations before or after.
 Format your JSON precisely as:
 {{
-  "fileReviews": {{
-    "file_path_1": {{
+  "fileReviews": [
+    {{
+      "filePath": "actual_file_path_here",
       "bugs": [
         {{ "type": "bug name", "line": 12, "description": "...", "suggestion": "..." }}
       ],
@@ -594,7 +622,7 @@ Format your JSON precisely as:
         {{ "type": "convention issue", "line": 15, "description": "...", "suggestion": "..." }}
       ]
     }}
-  }}
+  ]
 }}
 
 You must obey the JSON output format above."""
@@ -626,34 +654,15 @@ You must obey the JSON output format above."""
                     combined_result["generatedReadme"] = sanitize_ai_output(batch_result["generatedReadme"])
             
             if "fileReviews" in batch_result:
-                for file_path, review in batch_result["fileReviews"].items():
-                    # Sanitize review items
-                    for category in ["bugs", "security", "optimization", "styling"]:
-                        for item in review.get(category, []):
-                            if "suggestion" in item:
-                                item["suggestion"] = sanitize_ai_output(item["suggestion"])
-                            if "description" in item:
-                                item["description"] = sanitize_ai_output(item["description"])
-                    
-                    # Merge findings instead of overwriting
-                    if file_path in combined_result["fileReviews"]:
-                        print(f"WARNING: Merging findings for {file_path} from batch {idx + 1} (already exists from a previous batch)")
-                        existing = combined_result["fileReviews"][file_path]
-                        for category in ["bugs", "security", "optimization", "styling"]:
-                            existing_items = existing.get(category, [])
-                            new_items = review.get(category, [])
-                            seen = set()
-                            for item in existing_items:
-                                key = (item.get("type", ""), item.get("line", ""), item.get("description", ""))
-                                seen.add(key)
-                            for item in new_items:
-                                key = (item.get("type", ""), item.get("line", ""), item.get("description", ""))
-                                if key not in seen:
-                                    existing_items.append(item)
-                                    seen.add(key)
-                            existing[category] = existing_items
-                    else:
-                        combined_result["fileReviews"][file_path] = review
+                reviews = batch_result["fileReviews"]
+                if isinstance(reviews, list):
+                    for entry in reviews:
+                        file_path = entry.get("filePath", "unknown")
+                        review = {k: entry.get(k, []) for k in ("bugs", "security", "optimization", "styling")}
+                        _merge_review(combined_result, file_path, review, idx)
+                elif isinstance(reviews, dict):
+                    for file_path, review in reviews.items():
+                        _merge_review(combined_result, file_path, review, idx)
 
         except Exception as e:
             print(f"❌ Groq API Call Failed for batch {idx + 1}: {sanitize_error(str(e), api_key)}")

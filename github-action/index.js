@@ -129,7 +129,6 @@ async function run() {
       }
 
       console.log(`🔍 Reviewing: ${file.path} (${file.changes.length} changes)`);
-      reviewedFilesCount++;
 
       // 1. Run local secrets scanner
       const { findings: localSecretIssues, truncated: scanTruncated, totalChanges: scanTotal, skippedReason: scanReason } = scanSecretsInChanges(file.changes);
@@ -199,6 +198,8 @@ If no issues are found, reply with: { "reviews": [] }`;
             }
           }
         }
+
+        reviewedFilesCount++;
 
         if (issues.length > 0) {
           console.log(`✅ AI review returned ${issues.length} comments for ${file.path}`);

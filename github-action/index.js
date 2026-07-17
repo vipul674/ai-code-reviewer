@@ -252,9 +252,9 @@ Please review my feedback and suggestions below. Happy coding! 🚀
       console.log('🎉 No code issues or recommendations found in successful reviews. Posting review status...');
 
       const reviewEvent = (autoApprove && failedReviewsCount === 0) ? 'APPROVE' : 'COMMENT';
-      const issuesText = failedReviewsCount === 0 
-        ? `🎉 Outstanding work! I have scanned the PR and found **0 issues**. Your changes look pristine, clean, and optimized! Approved! 🚀`
-        : `⚠️ I have scanned **${successfulReviewsCount}** files and found **0 issues** in them. However, **${failedReviewsCount}** files could not be reviewed due to errors.`;
+      const issuesText = reviewEvent === 'APPROVE'
+        ? `🎉 Outstanding work! I have scanned the PR and found **0 issues**. Approved! 🚀`
+        : `✅ Review complete. Found 0 issues.`;
         
       await octokit.rest.pulls.createReview({
         owner,

@@ -881,7 +881,7 @@ export default function Dashboard() {
       setChatHistory((prev) => {
         const updated = truncateChatHistory([
           ...prev,
-          { role: "assistant" as const, content: data.response, sources: sources.length > 0 ? sources : undefined },
+          { role: "assistant" as const, content: data.response ?? data.message ?? "", sources: sources.length > 0 ? sources : undefined },
         ]);
         if (!safeSetItem(CHAT_HISTORY_KEY, JSON.stringify(updated))) setStorageWarning(true);
         return updated;

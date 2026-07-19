@@ -14,7 +14,6 @@ import MentorshipPortal from "../components/MentorshipPortal";
 import HealthScoreSection from "../components/HealthScoreSection";
 import ChatPanel from "../components/ChatPanel";
 import MermaidDiagramViewer from "../components/MermaidDiagramViewer";
-import HealthScoreGauge from "../components/HealthScoreGauge";
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';

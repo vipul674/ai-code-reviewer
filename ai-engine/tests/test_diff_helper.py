@@ -1,12 +1,20 @@
 """
-Unit tests for ai-engine/diff_helper.py pure utility functions.
+Unit tests for ai-engine/diff_helper.py pure utility functions and error paths.
 
 Covers:
 - filter_files_by_changes: filters a list of FileItem objects by changed set
 - format_diff_header: formats a human-readable diff-mode report header
+- get_changed_files_from_git: error-handling paths (subprocess failures)
+- get_changed_files_from_github_pr: error-handling paths (network failures)
 """
 import pytest
-from diff_helper import filter_files_by_changes, format_diff_header
+from diff_helper import (
+    get_changed_files_from_git,
+    filter_files_by_changes,
+    format_diff_header,
+    get_changed_files_from_github_pr
+)
+from app import FileItem
 
 
 class TestFilterFilesByChanges:
@@ -116,3 +124,133 @@ class TestFormatDiffHeader:
         result = format_diff_header(1000, 5000)
         assert "reviewing 1000 changed files" in result
         assert "Skipped: 5000 unchanged files" in result
+
+
+class TestGetChangedFilesFromGitErrorHandling:
+    """Error-handling tests for get_changed_files_from_git using subprocess mocking."""
+
+    def test_returns_empty_set_on_called_process_error(self):
+        """CalledProcessError (e.g. git not a repo) should return empty set."""
+        import subprocess
+        import diff_helper
+        original_run = subprocess.run
+
+        def fake_run(*args, **kwargs):
+            err = subprocess.CalledProcessError(1, 'git diff')
+            err.stderr = 'fatal: not a git repository'
+            raise err
+
+        diff_helper.subprocess.run = fake_run
+        try:
+            result = get_changed_files_from_git('main', 'HEAD')
+            assert result == set()
+        finally:
+            diff_helper.subprocess.run = original_run
+
+    def test_returns_empty_set_on_file_not_found(self):
+        """FileNotFoundError (git binary missing) should return empty set."""
+        import subprocess
+        import diff_helper
+        original_run = subprocess.run
+
+        def fake_run(*args, **kwargs):
+            raise FileNotFoundError('git not found')
+
+        diff_helper.subprocess.run = fake_run
+        try:
+            result = get_changed_files_from_git('main', 'HEAD')
+            assert result == set()
+        finally:
+            diff_helper.subprocess.run = original_run
+
+
+class TestGetChangedFilesFromGithubPrErrorHandling:
+    """Error-handling tests for get_changed_files_from_github_pr using requests mocking."""
+
+    def test_returns_empty_set_on_request_exception(self):
+        """Network failure (RequestException) should return empty set."""
+        import requests
+        import diff_helper
+        original_get = requests.get
+
+        def fake_get(*args, **kwargs):
+            raise requests.exceptions.RequestException('connection failed')
+
+        diff_helper.requests.get = fake_get
+        try:
+            result = get_changed_files_from_github_pr(
+                'owner', 'repo', 123, 'fake_token'
+            )
+            assert result == set()
+        finally:
+            diff_helper.requests.get = original_get
+
+    def test_returns_empty_set_on_http_error(self):
+        """Non-200 HTTP response should return empty set."""
+        import requests
+        import diff_helper
+        original_get = requests.get
+
+        class FakeResponse:
+            def raise_for_status(self):
+                raise requests.exceptions.HTTPError('404 Not Found')
+            def json(self):
+                return []
+
+        def fake_get(*args, **kwargs):
+            return FakeResponse()
+
+        diff_helper.requests.get = fake_get
+        try:
+            result = get_changed_files_from_github_pr(
+                'owner', 'repo', 123, 'fake_token'
+            )
+            assert result == set()
+        finally:
+            diff_helper.requests.get = original_get
+
+    def test_skips_files_with_missing_filename(self):
+        """File entries with no filename key should be skipped."""
+        import requests
+        import diff_helper
+        original_get = requests.get
+
+        page_count = [0]
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+            def json(self):
+                page_count[0] += 1
+                if page_count[0] == 1:
+                    # First page: one entry has no filename key
+                    return [{'status': 'modified'}, {'filename': 'valid.py'}]
+                return []  # Empty page ends pagination
+
+        def fake_get(*args, **kwargs):
+            return FakeResponse()
+
+        diff_helper.requests.get = fake_get
+        try:
+            result = get_changed_files_from_github_pr(
+                'owner', 'repo', 123, 'fake_token'
+            )
+            assert result == {'valid.py'}
+        finally:
+            diff_helper.requests.get = original_get
+
+    def test_returns_empty_set_on_unexpected_exception(self):
+        """Unexpected exception should return empty set (defensive)."""
+        import diff_helper
+        original_get = diff_helper.requests.get
+
+        def fake_get(*args, **kwargs):
+            raise RuntimeError('unexpected error')
+
+        diff_helper.requests.get = fake_get
+        try:
+            result = get_changed_files_from_github_pr(
+                'owner', 'repo', 123, 'fake_token'
+            )
+            assert result == set()
+        finally:
+            diff_helper.requests.get = original_get

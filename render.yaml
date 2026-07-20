@@ -13,13 +13,15 @@ services:
         value: "production"
       - key: GROQ_API_KEY
         sync: false
-      - key: FRONTEND_URL
+      - key: ALLOWED_ORIGINS
         sync: false
       - key: GITHUB_PAT
         sync: false
       - key: WEBHOOK_SECRET
         sync: false
       - key: REPOSAGE_API_KEY
+        sync: false
+      - key: SESSION_SECRET
         sync: false
       - key: AI_ENGINE_URL
         # We will point this to the AI engine service created below

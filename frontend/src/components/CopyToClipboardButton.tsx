@@ -15,7 +15,7 @@ export default function CopyToClipboardButton({
   showText = false,
 }: CopyToClipboardButtonProps) {
   const [isCopied, setIsCopied] = useState(false);
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {

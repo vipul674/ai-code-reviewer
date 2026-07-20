@@ -1,23 +1,19 @@
 import React, { useEffect, useState } from 'react';
+import { apiFetch } from './utils/api';
 
 interface TrendPoint {
-    timestamp: string;
-    repoName: string;
-    totalLines: number;
-    bugs: number;
-    security: number;
-    optimization: number;
-    styling: number;
-    filesCount: number;
+    date: string;
+    analyses: number;
+    totalFindings: number;
+    avgHealthScore: number;
+    totalBugs: number;
+    totalSecurityIssues: number;
 }
 
-const API_BASE_URL = 'http://localhost:5000';
-
 const SERIES = [
-    { key: 'bugs', label: 'Bugs', color: '#f97316' },
-    { key: 'security', label: 'Security', color: '#ef4444' },
-    { key: 'optimization', label: 'Perf', color: '#22c55e' },
-    { key: 'styling', label: 'Style', color: '#3b82f6' },
+    { key: 'totalFindings', label: 'Findings', color: '#f97316' },
+    { key: 'totalBugs', label: 'Bugs', color: '#ef4444' },
+    { key: 'totalSecurityIssues', label: 'Security', color: '#3b82f6' },
 ] as const;
 
 const CHART_WIDTH = 600;
@@ -34,7 +30,7 @@ const AnalyticsTrendsChart: React.FC = () => {
 
         const fetchTrends = async () => {
             try {
-                const res = await fetch(`${API_BASE_URL}/api/analytics/trends`);
+                const res = await apiFetch('/api/analytics/trends');
                 if (!res.ok) throw new Error('Failed to fetch trends');
                 const data = await res.json();
                 if (isMounted) {
@@ -257,7 +253,7 @@ const AnalyticsTrendsChart: React.FC = () => {
                                 r={2.5}
                                 fill={s.color}
                             >
-                                <title>{`${s.label}: ${t[s.key]} — ${t.repoName} (${formatDate(t.timestamp)})`}</title>
+                                <title>{`${s.label}: ${t[s.key]} (${formatDate(t.date)})`}</title>
                             </circle>
                         ))
                     )}
@@ -272,7 +268,7 @@ const AnalyticsTrendsChart: React.FC = () => {
                             fill="var(--subtext-color, #9ca3af)"
                             textAnchor="middle"
                         >
-                            {formatDate(trends[i].timestamp)}
+                            {formatDate(trends[i].date)}
                         </text>
                     ))}
                 </svg>

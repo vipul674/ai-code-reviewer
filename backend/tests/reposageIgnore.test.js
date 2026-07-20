@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { parseIgnoreFile, shouldIgnore } from '../utils/reposageIgnore.js';
+import { loadIgnorePatterns, isIgnored } from '../utils/ignoreHelper.js';
 
 async function withTempDir(fn) {
   const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'reposage-test-'));
@@ -14,188 +14,120 @@ async function withTempDir(fn) {
   }
 }
 
-test('parseIgnoreFile returns empty array for non-existent file path', async () => {
-  const result = parseIgnoreFile('/nonexistent/path/.reposageignore');
+test('loadIgnorePatterns returns empty array when no .reposageignore file exists', () => {
+  const result = loadIgnorePatterns('/nonexistent/path');
   assert.deepEqual(result, []);
 });
 
-test('parseIgnoreFile strips comment lines starting with #', async () => {
+test('loadIgnorePatterns strips comment lines and blank lines', async () => {
   await withTempDir(async (tmpDir) => {
     const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, '# This is a comment\n*.log\n# Another comment\nnode_modules/\n');
-    const result = parseIgnoreFile(ignorePath);
+    await fs.promises.writeFile(ignorePath, '# comment\n*.log\n\nbuild/\n');
+    const result = loadIgnorePatterns(tmpDir);
     assert.equal(result.length, 2);
-    assert.ok(!result.includes('# This is a comment'));
-    assert.ok(!result.includes('# Another comment'));
+    assert.ok(!result.includes('# comment'));
     assert.ok(result.includes('*.log'));
-    assert.ok(result.includes('node_modules/'));
+    assert.ok(result.includes('build/'));
   });
 });
 
-test('parseIgnoreFile strips blank lines', async () => {
+test('loadIgnorePatterns trims whitespace', async () => {
   await withTempDir(async (tmpDir) => {
     const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, '\n\n*.js\n\n  \n\nnode_modules/\n');
-    const result = parseIgnoreFile(ignorePath);
-    assert.equal(result.length, 2);
-    assert.ok(result.includes('*.js'));
-    assert.ok(result.includes('node_modules/'));
-  });
-});
-
-test('parseIgnoreFile trims whitespace from each pattern', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, '  *.js  \n  node_modules/  \n');
-    const result = parseIgnoreFile(ignorePath);
+    await fs.promises.writeFile(ignorePath, '  *.js  \n  dist/  \n');
+    const result = loadIgnorePatterns(tmpDir);
     assert.equal(result[0], '*.js');
-    assert.equal(result[1], 'node_modules/');
+    assert.equal(result[1], 'dist/');
   });
 });
 
-test('parseIgnoreFile preserves non-comment non-blank patterns', async () => {
+test('isIgnored returns false for empty or invalid patterns', () => {
+  assert.equal(isIgnored('src/app.js', null, '/repo'), false);
+  assert.equal(isIgnored('src/app.js', undefined, '/repo'), false);
+  assert.equal(isIgnored('src/app.js', [], '/repo'), false);
+});
+
+test('isIgnored matches trailing-slash directory patterns', async () => {
+  await withTempDir(async (tmpDir) => {
+    const patterns = ['build/'];
+    const filePath = path.join(tmpDir, 'build', 'output.js');
+    assert.equal(isIgnored(filePath, patterns, tmpDir), true);
+  });
+});
+
+test('isIgnored matches glob extension patterns', async () => {
+  await withTempDir(async (tmpDir) => {
+    const patterns = ['*.pyc'];
+    const filePath = path.join(tmpDir, 'cache', 'file.pyc');
+    assert.equal(isIgnored(filePath, patterns, tmpDir), true);
+  });
+});
+
+test('isIgnored matches double-star glob patterns', async () => {
+  await withTempDir(async (tmpDir) => {
+    const patterns = ['**/node_modules/**'];
+    let filePath = path.join(tmpDir, 'node_modules', 'pkg', 'index.js');
+    assert.equal(isIgnored(filePath, patterns, tmpDir), true);
+    filePath = path.join(tmpDir, 'src', 'node_modules', 'lib', 'util.js');
+    assert.equal(isIgnored(filePath, patterns, tmpDir), true);
+  });
+});
+
+test('isIgnored matches literal path patterns', async () => {
+  await withTempDir(async (tmpDir) => {
+    const patterns = ['dist'];
+    let filePath = path.join(tmpDir, 'dist');
+    assert.equal(isIgnored(filePath, patterns, tmpDir), true);
+    filePath = path.join(tmpDir, 'dist', 'bundle.js');
+    assert.equal(isIgnored(filePath, patterns, tmpDir), true);
+  });
+});
+
+test('isIgnored matches single-asterisk wildcard patterns', async () => {
+  await withTempDir(async (tmpDir) => {
+    const patterns = ['*.test.js'];
+    const filePath = path.join(tmpDir, 'helpers.test.js');
+    assert.equal(isIgnored(filePath, patterns, tmpDir), true);
+  });
+});
+
+test('isIgnored returns false for non-matching paths', async () => {
+  await withTempDir(async (tmpDir) => {
+    const patterns = ['*.py'];
+    const filePath = path.join(tmpDir, 'src', 'app.js');
+    assert.equal(isIgnored(filePath, patterns, tmpDir), false);
+  });
+});
+
+test('isIgnored handles mixed patterns from a single ignore file', async () => {
+  await withTempDir(async (tmpDir) => {
+    const patterns = ['*.log', 'build/', '**/node_modules/**', 'dist', '*.pyc'];
+    assert.equal(isIgnored(path.join(tmpDir, 'app.log'), patterns, tmpDir), true);
+    assert.equal(isIgnored(path.join(tmpDir, 'build', 'out.js'), patterns, tmpDir), true);
+    assert.equal(isIgnored(path.join(tmpDir, 'src', 'node_modules', 'pkg', 'index.js'), patterns, tmpDir), true);
+    assert.equal(isIgnored(path.join(tmpDir, 'dist', 'bundle.js'), patterns, tmpDir), true);
+    assert.equal(isIgnored(path.join(tmpDir, 'cache.pyc'), patterns, tmpDir), true);
+    assert.equal(isIgnored(path.join(tmpDir, 'src', 'app.js'), patterns, tmpDir), false);
+  });
+});
+
+test('isIgnored normalizes backslashes to forward slashes', async () => {
+  await withTempDir(async (tmpDir) => {
+    const patterns = ['*.js'];
+    const filePath = tmpDir + '\\src\\app.js';
+    assert.equal(isIgnored(filePath, patterns, tmpDir), true);
+  });
+});
+
+test('loadIgnorePatterns and isIgnored work together end-to-end', async () => {
   await withTempDir(async (tmpDir) => {
     const ignorePath = path.join(tmpDir, '.reposageignore');
-    const content = '*.js\n*.log\nnode_modules/\n.git/\n**/*.pyc';
-    await fs.promises.writeFile(ignorePath, content);
-    const result = parseIgnoreFile(ignorePath);
-    assert.equal(result.length, 5);
-    assert.ok(result.includes('*.js'));
-    assert.ok(result.includes('*.log'));
-    assert.ok(result.includes('node_modules/'));
-    assert.ok(result.includes('.git/'));
-    assert.ok(result.includes('**/*.pyc'));
-  });
-});
-
-test('shouldIgnore returns false when no .reposageignore file exists in repoRoot', async () => {
-  await withTempDir(async (tmpDir) => {
-    const result = shouldIgnore('src/app.js', tmpDir);
-    assert.equal(result, false);
-  });
-});
-
-test('shouldIgnore returns true for exact filename match', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, '*.js\n');
-    const result = shouldIgnore('src/app.js', tmpDir);
-    assert.equal(result, true);
-  });
-});
-
-test('shouldIgnore returns true for ** double-star glob', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, '**/*.pyc\n');
-    const result = shouldIgnore('src/cache/file.pyc', tmpDir);
-    assert.equal(result, true);
-  });
-});
-
-test('shouldIgnore returns true for trailing slash directory pattern', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, 'node_modules/\n');
-    const result = shouldIgnore('node_modules/package/index.js', tmpDir);
-    assert.equal(result, true);
-  });
-});
-
-test('shouldIgnore matches basename against pattern', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, 'node_modules\n');
-    // shouldIgnore also matches basename against pattern (not just full path)
-    const result = shouldIgnore('node_modules', tmpDir);
-    assert.equal(result, true);
-  });
-});
-
-test('shouldIgnore returns false for non-matching paths', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, '*.py\n');
-    const result = shouldIgnore('src/app.js', tmpDir);
-    assert.equal(result, false);
-  });
-});
-
-test('shouldIgnore handles paths with backslashes by normalizing to forward slashes', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, '*.js\n');
-    // path with backslashes
-    const result = shouldIgnore('src\\app.js', tmpDir);
-    // Should normalize and match
-    assert.equal(result, true);
-  });
-});
-
-test('shouldIgnore handles empty patterns array (no .reposageignore content)', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, '# only comments\n# another comment\n');
-    const result = shouldIgnore('src/app.js', tmpDir);
-    assert.equal(result, false);
-  });
-});
-
-test('shouldIgnore matches pattern with asterisk wildcard', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, '*.test.js\n');
-    const result = shouldIgnore('helpers.test.js', tmpDir);
-    assert.equal(result, true);
-  });
-});
-
-test('shouldIgnore does not match when path does not match pattern', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, '*.test.js\n');
-    const result = shouldIgnore('helpers.js', tmpDir);
-    assert.equal(result, false);
-  });
-});
-
-test('shouldIgnore throws TypeError when filePath is null', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, '*.js\n');
-    try {
-      shouldIgnore(null, tmpDir);
-      assert.fail('Expected TypeError to be thrown');
-    } catch (e) {
-      assert.ok(e instanceof TypeError, 'Should throw TypeError');
-      assert.ok(e.message.includes('replace'), 'Error relates to string operation');
-    }
-  });
-});
-
-test('shouldIgnore returns false for empty filePath input', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, '*.js\n');
-    const result = shouldIgnore('', tmpDir);
-    assert.equal(result, false);
-  });
-});
-
-test('shouldIgnore directory segment matching with trailing slash', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, 'build/\n');
-    const result = shouldIgnore('build/output.js', tmpDir);
-    assert.equal(result, true);
-  });
-});
-
-test('shouldIgnore directory pattern matches any file in that directory', async () => {
-  await withTempDir(async (tmpDir) => {
-    const ignorePath = path.join(tmpDir, '.reposageignore');
-    await fs.promises.writeFile(ignorePath, 'temp/\n');
-    const result = shouldIgnore('temp/repo/file.txt', tmpDir);
-    assert.equal(result, true);
+    await fs.promises.writeFile(ignorePath, '*.log\nbuild/\n**/__pycache__/**\n');
+    const patterns = loadIgnorePatterns(tmpDir);
+    assert.equal(patterns.length, 3);
+    assert.equal(isIgnored(path.join(tmpDir, 'server.log'), patterns, tmpDir), true);
+    assert.equal(isIgnored(path.join(tmpDir, 'build', 'asset.js'), patterns, tmpDir), true);
+    assert.equal(isIgnored(path.join(tmpDir, 'src', '__pycache__', 'main.cpython-312.pyc'), patterns, tmpDir), true);
+    assert.equal(isIgnored(path.join(tmpDir, 'src', 'index.js'), patterns, tmpDir), false);
   });
 });

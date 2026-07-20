@@ -9,7 +9,7 @@ VECTORS_FILE = os.path.join(DATA_DIR, "vectors.json")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 _vectors = []
-_vectors_lock = threading.Lock()
+_vectors_lock = threading.RLock()
 
 
 def _load():

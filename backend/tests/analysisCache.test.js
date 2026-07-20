@@ -226,8 +226,8 @@ test('AnalysisCache: invalidateByRepoUrl removes all entries for that repo', () 
   // Store two different entries for the same repo
   const key1 = cache.generateKey(repo, [{ name: 'a.js', content: 'a' }]);
   const key2 = cache.generateKey(repo, [{ name: 'b.js', content: 'b' }]);
-  cache.set(key1, { data: 1 }, repo);
-  cache.set(key2, { data: 2 }, repo);
+  cache.set(key1, { data: 1 }, { repoUrl: repo });
+  cache.set(key2, { data: 2 }, { repoUrl: repo });
 
   assert.equal(cache.cache.size, 2);
 
@@ -243,7 +243,7 @@ test('AnalysisCache: invalidateByRepoUrl returns 0 for non-existent repo', () =>
   const cache = new AnalysisCache();
   const repo = 'https://github.com/nonexistent/project';
   const key = cache.generateKey(repo, [{ name: 'x.js', content: 'x' }]);
-  cache.set(key, { data: 1 }, repo);
+  cache.set(key, { data: 1 }, { repoUrl: repo });
 
   const removed = cache.invalidateByRepoUrl('https://github.com/other/repo');
 
@@ -256,7 +256,7 @@ test('AnalysisCache: invalidateByRepoUrl normalizes trailing slashes and case', 
   const repo1 = 'https://github.com/owner/repo';
   const repo2 = 'https://github.com/owner/repo///';
   const key1 = cache.generateKey(repo1, [{ name: 'f.js', content: 'f' }]);
-  cache.set(key1, { data: 1 }, repo1);
+  cache.set(key1, { data: 1 }, { repoUrl: repo1 });
 
   const removed = cache.invalidateByRepoUrl(repo2);
 
@@ -301,4 +301,27 @@ test('AnalysisCache: setMaxEntries does nothing if cache is already below new li
 
   assert.equal(cache.maxEntries, 100);
   assert.equal(cache.cache.size, 1, 'Single entry should remain');
+});
+
+test('AnalysisCache: sweeper evicts expired keys from _repoUrlIndex and cleans empty Sets', async () => {
+  const cache = new AnalysisCache(20); // 20ms TTL
+  const repo = 'https://github.com/owner/repo-sweeper';
+  const key = cache.generateKey(repo, [{ name: 'file.js', content: 'content' }]);
+  
+  // Set entry
+  cache.set(key, { data: 123 }, { repoUrl: repo });
+  assert.equal(cache._repoUrlIndex.has(repo), true);
+  assert.equal(cache._repoUrlIndex.get(repo).has(key), true);
+
+  // Stop default sweeper and start a fast one
+  cache._stopSweeper();
+  cache._startSweeper(10);
+
+  // Wait for eviction
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  assert.equal(cache.cache.has(key), false, 'Cache key should be deleted');
+  assert.equal(cache._repoUrlIndex.has(repo), false, 'Empty Set should be deleted from index map');
+  
+  cache._stopSweeper();
 });

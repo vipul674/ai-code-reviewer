@@ -3,6 +3,23 @@ import path from 'path';
 
 // Helper to delete a folder recursively
 export function deleteFolderRecursive(directoryPath) {
+  let isTopLevelSymlink = false;
+  try {
+    isTopLevelSymlink = fs.lstatSync(directoryPath).isSymbolicLink();
+  } catch {
+    // Path does not exist or is inaccessible; fall through to the exists check below.
+  }
+  if (isTopLevelSymlink) {
+    // If the directory path itself is a symlink, remove only the link and
+    // never recurse into the target (prevents deleting the symlink target's
+    // contents, e.g. /etc or a sibling project directory).
+    try {
+      fs.unlinkSync(directoryPath);
+    } catch {
+      // Skip if the symlink cannot be removed (e.g., permission error).
+    }
+    return;
+  }
   if (fs.existsSync(directoryPath)) {
     fs.readdirSync(directoryPath).forEach((file) => {
       const curPath = path.join(directoryPath, file);
@@ -71,4 +88,17 @@ export async function getFolderSize(dirPath) {
     console.warn(`getFolderSize: could not read path ${dirPath}: ${err.message}`);
   }
   return size;
+}
+
+// Helper to resolve and validate paths to prevent directory traversal
+export function resolveSafePath(baseDir, targetPath) {
+  const resolvedBase = path.resolve(baseDir);
+  const absolutePath = path.resolve(resolvedBase, targetPath);
+
+  // Allow the base directory itself, otherwise require it to be strictly inside
+  if (!absolutePath.startsWith(resolvedBase + path.sep) && absolutePath !== resolvedBase) {
+    throw new Error('Path traversal blocked');
+  }
+
+  return absolutePath;
 }

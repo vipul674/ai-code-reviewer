@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import yaml from 'js-yaml';
+import { load as yamlLoad } from 'js-yaml';
 
 const DEFAULT_CONFIG = {
   severity: {
@@ -17,7 +17,7 @@ function loadConfigFile(repoPath) {
   try {
     if (fs.existsSync(configPath)) {
       const fileContent = fs.readFileSync(configPath, 'utf-8');
-      const config = yaml.load(fileContent) || {};
+      const config = yamlLoad(fileContent) || {};
       return mergeWithDefaults(config);
     }
   } catch (err) {
@@ -38,8 +38,9 @@ function mergeWithDefaults(userConfig) {
 }
 
 function categorizeFinding(finding) {
-  const message = (finding.message || '').toLowerCase();
-  const ruleId = (finding.rule_id || '').toLowerCase();
+  if (!finding) return 'other';
+  const message = (finding.description || finding.message || '').toLowerCase();
+  const ruleId = (finding.rule || finding.rule_id || '').toLowerCase();
 
   if (message.includes('security') || ruleId.includes('security') ||
       message.includes('injection') || message.includes('credential') ||
@@ -66,7 +67,10 @@ function applySeverityConfig(findings, config) {
   const severityMap = config.severity || DEFAULT_CONFIG.severity;
 
   return findings
-    .filter(finding => !suppressedRules.has(finding.rule_id))
+    .filter(finding => {
+      const ruleId = finding.rule_id || finding.rule;
+      return !suppressedRules.has(ruleId);
+    })
     .map(finding => {
       const category = categorizeFinding(finding);
       const mappedSeverity = severityMap[category] || finding.severity;
@@ -86,10 +90,10 @@ function filterByMinimumSeverity(findings, minimumSeverity = 'error') {
     info: 2,
   };
 
-  const minRank = severityRank[minimumSeverity] || 0;
+  const minRank = severityRank[minimumSeverity] ?? 0;
 
   return findings.filter(f => {
-    const rank = severityRank[f.severity] || 2;
+    const rank = severityRank[f.severity] ?? 2;
     return rank <= minRank;
   });
 }

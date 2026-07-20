@@ -1,22 +1,22 @@
 export const rules = [
   {
     type: "AWS Access Key Check",
-    regex: /AKIA[0-9A-Z]{16}/g,
+    regex: /\bAKIA[0-9A-Z]{16}\b/g,
     description: "Potential AWS Access Key ID detected. If pushed to a public repository, malicious parties can hijack your AWS cloud infrastructure."
   },
   {
     type: "GitHub Personal Access Token",
-    regex: /ghp_[a-zA-Z0-9]{36}/g,
+    regex: /\bghp_[a-zA-Z0-9]{36}\b/g,
     description: "Hardcoded GitHub Personal Access Token detected. Unauthorized users can gain complete read/write access to your repositories."
   },
   {
     type: "Stripe Secret API Key",
-    regex: /sk_live_[0-9a-zA-Z]{24}/g,
+    regex: /\bsk_live_[0-9a-zA-Z]{24}\b/g,
     description: "Hardcoded live Stripe Secret Key detected. This can expose customer transaction history or result in financial exploitation."
   },
   {
     type: "Google Cloud API Key",
-    regex: /AIzaSy[a-zA-Z0-9-_]{33}/g,
+    regex: /\bAIzaSy[a-zA-Z0-9-_]{33,40}\b/g,
     description: "Hardcoded Google Cloud API Key detected. Allows unauthorized usage of GCP billing services and resources."
   },
   {
@@ -61,7 +61,7 @@ export const rules = [
   },
   {
     type: "Hardcoded IPv4 Address",
-    regex: /\b(?!127\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)(?!0\.0\.0\.0\b)(?!255\.255\.255\.255\b)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g,
+    regex: /\b(?!10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)(?!127\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)(?!172\.1[6-9]\.\d{1,3}\.\d{1,3}\b)(?!172\.2\d\.\d{1,3}\.\d{1,3}\b)(?!172\.3[01]\.\d{1,3}\.\d{1,3}\b)(?!169\.254\.\d{1,3}\.\d{1,3}\b)(?!192\.168\.\d{1,3}\.\d{1,3}\b)(?!192\.0\.2\.\d{1,3}\b)(?!198\.51\.100\.\d{1,3}\b)(?!203\.0\.113\.\d{1,3}\b)(?!0\.0\.0\.0\b)(?!255\.255\.255\.255\b)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g,
     description: "🌐 [Network/Crypto Leak] Hardcoded IPv4 address detected. Exposing internal or public IP addresses in source code reveals network topology and can assist attackers in reconnaissance or lateral movement."
   },
   {
@@ -73,6 +73,16 @@ export const rules = [
     type: "Bitcoin (BTC) Wallet Address",
     regex: /\b(?:1[1-9A-HJ-NP-Za-km-z]{25,34}|3[1-9A-HJ-NP-Za-km-z]{25,34}|bc1[0-9a-z]{25,39})\b/g,
     description: "🪙 [Network/Crypto Leak] Hardcoded Bitcoin wallet address detected. Committing cryptocurrency wallet addresses to public repositories exposes them to scraping bots and targeted attacks."
+  },
+  {
+    type: "Slack Token Check",
+    regex: /\bxox[baprs]-[0-9a-zA-Z]{10,48}\b/g,
+    description: "Potential hardcoded Slack token (User, Bot, App, or Workspace) detected. Unauthorized users can interact with your Slack workspace APIs."
+  },
+  {
+    type: "Discord Bot Token",
+    regex: /\b[a-zA-Z0-9_-]{24}\.[a-zA-Z0-9_-]{6}\.[a-zA-Z0-9_-]{27}\b/g,
+    description: "Potential hardcoded Discord Bot Token detected. This allows attackers to fully control your Discord bot and access guilds/channels."
   }
 ];
 
@@ -92,10 +102,17 @@ export function scanSecrets(fileContent) {
   const startTime = Date.now();
   const maxLineLength = getMaxLineLength();
   const scanTimeoutMs = getScanTimeoutMs();
+  let truncationWarningLogged = false;
   for (let idx = 0; idx < lines.length; idx++) {
     if (Date.now() - startTime > scanTimeoutMs) break;
     const line = lines[idx];
-    if (line.length > maxLineLength) continue;
+    if (line.length > maxLineLength) {
+      if (!truncationWarningLogged) {
+        console.warn(`Secret scan truncated: line ${idx + 1} exceeds max length of ${maxLineLength} chars. Subsequent long lines also skipped.`);
+        truncationWarningLogged = true;
+      }
+      continue;
+    }
     for (const rule of rules) {
       if (Date.now() - startTime > scanTimeoutMs) break;
       rule.regex.lastIndex = 0;
@@ -156,7 +173,11 @@ export function scanSecretsInChanges(changes) {
         break;
       }
       const lineContent = lines[lineIdx];
-      if (lineContent.length > maxLineLen) continue;
+      if (lineContent.length > maxLineLen) {
+        stoppedEarly = true;
+        if (!reason) reason = `Line exceeds max length of ${maxLineLen} chars; scan truncated.`;
+        continue;
+      }
       for (const rule of rules) {
         if (Date.now() - startTime > timeoutMs) {
           stoppedEarly = true;

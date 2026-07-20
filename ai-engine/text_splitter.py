@@ -71,6 +71,9 @@ def _make_splitter(file_name: str, content: str = "", chunk_size: Optional[int] 
     final_chunk_size = chunk_size if chunk_size is not None else _CHUNK_SIZE
     final_chunk_overlap = chunk_overlap if chunk_overlap is not None else _CHUNK_OVERLAP
     
+    if final_chunk_size <= 0:
+        raise ValueError("chunk_size must be > 0")
+        
     if final_chunk_overlap >= final_chunk_size:
         final_chunk_overlap = max(0, final_chunk_size - 1)
         
@@ -117,14 +120,15 @@ def split_file_content(
     line_numbers = _calculate_line_numbers(content, chunks, start_indices)
 
     results = []
+    capped_chunks = min(len(chunks), _MAX_CHUNKS_PER_FILE)
     for i, chunk in enumerate(chunks):
-        if i >= _MAX_CHUNKS_PER_FILE:
+        if i >= capped_chunks:
             break
         metadata = {
             "source_file": file_name,
             "fileName": file_name,
             "chunk_index": i,
-            "total_chunks": len(chunks),
+            "total_chunks": capped_chunks,
             "language": _detect_language(file_name, content),
             "start_line": line_numbers[i][0],
             "end_line": line_numbers[i][1],
